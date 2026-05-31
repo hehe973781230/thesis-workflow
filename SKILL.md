@@ -1,27 +1,11 @@
 ---
 name: mba-thesis-workflow
 version: 1.4
-description: 多Agent协作完成MBA/学术论文写作的完整工作流，支持双版本起草、审核、整合、定稿。适用于开题报告到毕业论文的全流程。**⚠️强制触发（禁止绕过）：生成论文Word文档时，必须先执行 Review Agent 终审 → 格式自检 → 调用 md2docx_strict.py → 邮件发送，四步缺一不可。**
+description: 多Agent协作完成MBA/学术论文写作的完整工作流，支持双版本起草、审核、整合、定稿。适用于开题报告到毕业论文的全流程。
 metadata: {"clawdbot":{"emoji":"📝","requires":{},"os":["linux","darwin","win32"]}}
 ---
 
 # MBA/学术论文多Agent协作工作流
-
-## ⚠️ 触发规则（必须遵守）
-
-
-**当用户请求生成 Word 文档且满足以下任一条件时，必须调用本 skill 的 Word 输出流程，不得使用简单 md2docx 脚本：**
-
-- 输入文件路径匹配：`论文*.md`、`论文*.md`、`*thesis*.md`、`*dissertation*.md`
-- 上下文中存在「论文」「MBA」「答辩」「开题」等关键词
-- 用户明确要求导出 `.docx` 格式且文件性质为学术论文
-
-**禁止的行为：**
-- ❌ 用简单 ~50行 Python 脚本直接 md→docx 转换论文文件
-- ❌ 跳过 Review Agent 终审直接输出 Word
-- ❌ 不检查格式规范（分页/三线表/标题层级/加粗过滤）就交付
-
-**正确流程：** 写作语法预检 → Review Agent 终审 → 合规 md2docx 转换 → Word 输出
 
 ## 适用场景
 
@@ -51,64 +35,22 @@ Phase 5  →  终审 → 满足终止条件 → 最终Word文档交付
 
 ### 版本H的调用方式（H是关键区分）
 
-**⚠️ 首先检测 Hermes 可用性：**
-
-```bash
-# 检测 Hermes 是否安装并可用
-if hermes --version &>/dev/null 2>&1; then
-  AGENT_TYPE="hermes"
-  echo "Hermes 可用，使用版本H（Hermes CLI）执行"
-else
-  AGENT_TYPE="openclaw"
-  echo "Hermes 不可用，回退到 OpenClaw 单版本执行"
-fi
-```
-
-**版本H（Hermes可用时）** 通过 `exec hermes chat` 调用真实Hermes Agent：
+**版本H（Hermes）** 必须通过 `exec hermes chat` 调用真实Hermes Agent，不走 `sessions_spawn`。
 
 **正确调用方式：**
 ```bash
-exec hermes chat -q "<完整写作任务>" -Q --max-turns 30
-```
-
-**版本H（Hermes不可用时 → 回退到OpenClaw）** 通过 `sessions_spawn` 启动subagent执行，prompt中同样包含数据查询工具说明：
-
-```bash
-# Hermes 不可用时的等效执行
-sessions_spawn(mode="run", runtime="subagent", 
-  task="<写作任务，包含数据查询工具说明>", 
-  taskName="xxx")
+hermes chat -q "<完整写作任务>" -Q --max-turns 30
 ```
 
 **写入文件的方式（重要）：**
-在prompt里指定输出路径，让Agent直接写文件：
+在prompt里指定输出路径，让Hermes直接写文件：
 ```bash
-exec hermes chat -q "...
-保存到文件：{WORKSPACE_ROOT}/论文_XXX公司_v1.0_H_chapter3_4.md
+hermes chat -q "...
+保存到文件：/Users/hehe9737/.openclaw/workspace/论文_A公司_v1.0_H_chapter3_4.md
 ..." -Q --max-turns 30
-# 或者 OpenClaw 回退时：
-sessions_spawn(..., task="...保存到文件：{WORKSPACE_ROOT}/论文_XXX公司_v1.0_H_chapter3_4.md...", ...)
 ```
 
-**⚠️ 必须在prompt中显式告知可调用的数据查询工具：**
-
-```
-【数据查询工具】（按需主动调用，不要只靠内部知识）
-- multi-search-engine — 行业数据、企业信息、市场规模、新闻事件（无需API Key）
-  调用方式：web_search 或直接描述搜索需求
-- academic-research — 学术文献搜索、文献综述、引用分析（OpenAlex 2.5亿+论文）
-  调用方式：python3 scripts/scholar-search.py search "关键词"
-- arxiv-search-collector — 追踪最新学术论文（arXiv）
-  调用方式：arxiv-search-collector skill
-
-【调用原则】
-- 起草阶段：优先用 multi-search-engine 查行业数据、市场规模、企业背景
-- 理论框架/文献综述：优先用 academic-research 搜学术论文
-- 前沿研究/最新进展：优先用 arxiv-search-collector 追踪arXiv论文
-- 每个数据/引用都必须标注来源，说明用了哪个工具查询得到
-```
-
-**原因：** Hermes CLI直接输出文字，无法通过sessions机制传递结果给后续流程，所以必须让Agent自己把结果写入指定文件路径。Hermes不可用时，OpenClaw subagent执行相同逻辑，结果写入同一文件路径。
+**原因：** Hermes CLI直接输出文字，无法通过sessions机制传递结果给后续流程，所以必须让Hermes自己把结果写入指定文件路径。
 
 ### 版本O的调用方式
 
@@ -147,7 +89,7 @@ sessions_spawn(mode="run", runtime="subagent", task="<写作任务>", ...)
 | 维度 | 内容 | 备注 |
 |------|------|------|
 | 论文基本信息 | 题目/作者/学号/专业/学位类型/答辩年份 | 红色星标项 |
-| **联系方式** | ⭐ **邮箱地址（必填，用于发送阶段成果和终稿Word）** | ⭐ 未提供则无法流转至 Phase 2 |
+| **联系方式** | **邮箱地址**（必填，用于发送阶段成果） | ⭐ 未提供则无法流转至 Phase 2 |
 | 大纲结构 | 7章大纲逐章确认保留/修改/增删 | 红色星标项 |
 | 写作标准 | 字数(≥3.5万)/引用格式(GB\/T7714作者年制)/语言风格 | — |
 | 审核维度 | 格式/大纲/内容准确性/查重风险/学术规范/完整性 | — |
@@ -174,56 +116,20 @@ sessions_spawn(mode="run", runtime="subagent", task="<写作任务>", ...)
 
 **执行方式：**
 ```bash
-# 首先检测 Hermes 可用性
-if hermes --version &>/dev/null 2>&1; then
-  AGENT_TYPE="hermes"
-  echo "Hermes 可用，使用版本H（Hermes CLI）执行"
-else
-  AGENT_TYPE="openclaw"
-  echo "Hermes 不可用，回退到 OpenClaw 单版本执行"
-fi
+# 版本H：真实调用Hermes CLI
+hermes chat -q "<任务>" -Q --max-turns 30 &
 
-# 版本H：Hermes可用时使用Hermes CLI，不可用时回退到OpenClaw subagent
-if [ "$AGENT_TYPE" = "hermes" ]; then
-  # Hermes CLI（prompt中必须包含数据查询工具说明，见上文）
-  exec hermes chat -q "<任务，包含数据查询工具说明>" -Q --max-turns 30
-else
-  # OpenClaw subagent（Hermes不可用时的回退路径）
-  sessions_spawn(mode="run", runtime="subagent", task="<任务，包含数据查询工具说明>", taskName="xxx")
-fi
-
-# 版本O：OpenClaw subagent（始终使用）
+# 版本O：OpenClaw subagent
 sessions_spawn(mode="run", runtime="subagent", task="<任务>", taskName="xxx")
-```
-
-**⚠️ 版本H的prompt模板（可直接套用）：**
-```
-请为论文《{题目}》撰写第{章号}章内容。
-
-【写作任务】
-{具体写作要求}
-
-【数据查询工具】（按需主动调用）
-- multi-search-engine — 行业数据、企业信息、市场规模、新闻事件
-  调用方式：描述搜索需求，让系统执行搜索
-- academic-research — 学术文献搜索（OpenAlex 2.5亿+论文）
-  调用方式：python3 ~/.openclaw/workspace/skills/academic-research/scripts/scholar-search.py search "关键词"
-- arxiv-search-collector — 追踪最新学术论文
-  调用方式：使用arxiv-search-collector skill
-
-【写作要求】
-- 每个数据/引用必须标注来源，说明用了哪个工具查询得到
-- 引用他人观点时必须paraphrase，禁止直接复制原文
-- 写完后保存到：{文件路径}
 ```
 
 **输出物（Phase 2完成后应存在）：**
 ```
-论文_XXX公司_v1.0_H_chapter3_4.md      （Hermes CLI写出）
-论文_XXX公司_v1.0_H_chapter5_6.md      （Hermes CLI写出）
-论文_XXX公司_v1.0_O_chapter3_4.md      （OpenClaw subagent写出）
-论文_XXX公司_v1.0_O_chapter5_6.md      （OpenClaw subagent写出）
-论文_XXX公司_v1.0_chapter1_2_7.md      （OpenClaw subagent写出，单版本）
+论文_A公司_v1.0_H_chapter3_4.md      （Hermes CLI写出）
+论文_A公司_v1.0_H_chapter5_6.md      （Hermes CLI写出）
+论文_A公司_v1.0_O_chapter3_4.md      （OpenClaw subagent写出）
+论文_A公司_v1.0_O_chapter5_6.md      （OpenClaw subagent写出）
+论文_A公司_v1.0_chapter1_2_7.md      （OpenClaw subagent写出，单版本）
 ```
 
 **起草约束（前置查重）：**
@@ -266,6 +172,8 @@ sessions_spawn(mode="run", runtime="subagent", task="<任务>", taskName="xxx")
 ### Phase 3：双版本审核
 
 **目标：** Review Agent 分别对版本H 和 版本O 输出独立审核报告。
+
+**审核前准备：** Review Agent 必须先读取两个版本的完整内容，再开始审核。
 
 **审核维度（逐项打分 + 修改建议）：**
 
@@ -324,7 +232,17 @@ sessions_spawn(mode="run", runtime="subagent", task="<任务>", taskName="xxx")
 | 文后中文格式 | 期刊：作者：《题名》，《刊名》，年份期次；专著：作者：《书名》，出版社年份；论文集：作者：《题名》，主编，《论文集名》，出版社年份 |
 | 文后英文格式 | 作者姓写在前名缩写在后，杂志名书名斜体；同一作者同年多篇加a/b/c区分 |
 
-#### 六、写作语法维度（新增）
+#### 六、文献完整性维度（新增，必须检查）
+
+
+| 检查项 | 具体标准 |
+|--------|---------|
+| 正文引用对应 | 正文每一条 `（作者, 年）` 引用，必须在文后参考文献中列出；未列出者标🔴 |
+| 参考文献格式 | 检查文后参考文献是否使用 GB/T 7714 作者年制；中文在前英文在后分别排序 |
+| 文献完整性 | Phase 2 起草时要求在对应章节末尾列出参考文献；Phase 4 整合时必须包含参考文献章节 |
+
+
+#### 七、写作语法维度
 
 | 检查项 | 具体标准 |
 |--------|---------|
@@ -352,6 +270,9 @@ sessions_spawn(mode="run", runtime="subagent", task="<任务>", taskName="xxx")
 
 **目标：** Review Agent 出整合方案，OpenClaw 执行整合。
 
+**⚠️ 参考文献章节必须整合：** 参考文献作为独立章节，不能遗漏。
+
+
 **执行逻辑：**
 1. Review Agent 逐一分析审核报告中的每个问题
 2. 判断问题出在哪个版本
@@ -359,6 +280,7 @@ sessions_spawn(mode="run", runtime="subagent", task="<任务>", taskName="xxx")
 4. 对格式规范性问题参考版本O的处理方式
 5. **不强行整合**——冲突时保留质量更高的版本
 6. 确保全文语言风格、术语体系统一
+7. **参考文献章节**：汇总两个版本的引用，格式统一（中文在前，英文在后），去重排序
 
 **⚠️ 核心原则：取长补短，但不为统一而破坏内容质量。**
 
@@ -397,6 +319,9 @@ md2docx 转换脚本需满足以下要求，否则会在 Word 中产生视觉噪
 
 **目标：** 最终审核通过后交付正式文档。
 
+
+**⚠️ Word输出说明：** 如无 `scripts/md2docx_strict.py` 合规脚本，Phase 5 输出的 Word 文档需人工调整格式（分页、三线表、字体行距等）。建议优先使用学术格式工具或手动按格式维度调整。
+
 **终审检查项：**
 1. 所有审核问题已修复（无🔴项）
 2. 格式最终检查（按上述格式维度逐项核查）
@@ -419,29 +344,6 @@ md2docx 转换脚本需满足以下要求，否则会在 Word 中产生视觉噪
 ```
 
 ---
-
-### Phase 5.5：邮件发送（自动触发）
-
-**触发时机：** Word文档生成完成后自动执行，无需用户额外指令。
-
-**收件人规则：**
-- 优先使用 Phase 1 用户提供的邮箱地址
-- 若 Phase 1 未提供邮箱 → 默认发送至 `{USER_EMAIL}`
-
-**邮件内容：**
-- 主题：`论文_{题目}_v{n}.0_终稿.docx`
-- 正文：简短说明（"论文已完成，请查收附件"）
-- 附件：生成的 Word 文档
-
-**调用方式：**
-使用 email-sender skill 发送：
-```bash
-python3 ~/.openclaw/workspace/skills/email-sender/scripts/send_email.py \
-  --to {用户邮箱或默认{USER_EMAIL}} \
-  --subject "论文终稿" \
-  --body "论文已完成，请查收附件。" \
-  --attachment {输出文件路径}
-```
 
 ## 版本命名规范
 
@@ -495,49 +397,3 @@ python3 ~/.openclaw/workspace/skills/email-sender/scripts/send_email.py \
 - **正文引用格式不得使用上标加序号形式，必须使用作者年制**
 - 正文字数不得少于3.5万字
 - **写作时严格遵守写作语法规范，正文段落中不得使用 `**加粗**` 强调术语**
----
-
-### Phase 3.5 追加深度学术评审（可选项）
-
-**目标：** 使用 `academic-thesis-review-skill` 对版本H 和 版本O 进行深度学术评审，补充格式审核之外的学术规范性审查。
-
-**前提：** Phase 3 审核报告已完成（审核报告H.md + 审核报告O.md）
-
-**执行方式：**
-```bash
-# 版本H的深度学术评审
-sessions_spawn(mode="run", runtime="subagent",
-  task="使用 academic-thesis-review-skill 对论文进行深度评审：
-  论文文件：{WORKSPACE_ROOT}/论文_{题目}_v1.0_H_chapter3_4.md 和 论文_{题目}_v1.0_H_chapter5_6.md
-  或者合并后的版本H文件
-  
-  执行3轮评审（Round 1宏观结构/Round 2分章节深度/Round 3跨章节一致性）
-  
-  输出文件：{WORKSPACE_ROOT}/论文_{题目}_v2.0_review_results_H.md
-  
-  注意：如果工作区已存在 review_results.md（迭代复审），请先读取并执行防锚定迭代审阅流程",
-  taskName="deep_review_h")
-
-# 版本O的深度学术评审（可选）
-sessions_spawn(mode="run", runtime="subagent",
-  task="使用 academic-thesis-review-skill 对论文进行深度评审：
-  论文文件：{WORKSPACE_ROOT}/论文_{题目}_v1.0_O_chapter3_4.md 和 论文_{题目}_v1.0_O_chapter5_6.md
-  或者合并后的版本O文件
-  
-  执行3轮评审（Round 1宏观结构/Round 2分章节深度/Round 3跨章节一致性）
-  
-  输出文件：{WORKSPACE_ROOT}/论文_{题目}_v2.0_review_results_O.md",
-  taskName="deep_review_o")
-```
-
-**输出物：**
-```
-review_results_H.md（版本H的学术深度评审报告）
-review_results_O.md（版本O的学术深度评审报告）
-```
-
-**与 Phase 3 的区别：**
-- Phase 3：格式+大纲+内容准确性审核（快速结构化）
-- Phase 3.5：学术深度评审（论证逻辑、引用规范性、学术写作规范）
-
-**两者互补，不替代。建议 MBA/MEM/MPA 论文都执行 Phase 3.5。**
