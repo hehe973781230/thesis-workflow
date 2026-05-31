@@ -256,6 +256,8 @@ sessions_spawn(mode="run", runtime="subagent", task="<任务>", taskName="xxx")
 
 ---
 
+**两者互补，不替代。建议 MBA/MEM/MPA 论文都执行 Phase 3.5。**
+
 ### Phase 4：整合与升华
 
 **目标：** Review Agent 出整合方案，OpenClaw 执行整合。
