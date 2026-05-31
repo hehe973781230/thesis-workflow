@@ -256,7 +256,42 @@ sessions_spawn(mode="run", runtime="subagent", task="<任务>", taskName="xxx")
 
 ---
 
-**两者互补，不替代。建议 MBA/MEM/MPA 论文都执行 Phase 3.5。**
+### Phase 3.5：深度学术评审
+
+**目标：** 使用 `academic-thesis-review-skill` 对版本H 和 版本O 进行深度学术评审，补充格式审核之外的学术规范性审查。
+
+**前提：** Phase 3 审核报告已完成（审核报告H.md + 审核报告O.md）
+
+**执行方式：**
+```bash
+# 版本H的深度学术评审
+sessions_spawn(mode="run", runtime="subagent",
+  task="使用 academic-thesis-review-skill 对论文进行深度评审：
+  论文文件：{WORKSPACE_ROOT}/论文_{题目}_v1.0_H_chapter3_4.md
+  执行3轮评审（Round 1宏观结构/Round 2分章节深度/Round 3跨章节一致性）
+  输出文件：{WORKSPACE_ROOT}/论文_{题目}_v2.0_review_results_H.md",
+  taskName="deep_review_h")
+
+# 版本O的深度学术评审
+sessions_spawn(mode="run", runtime="subagent",
+  task="使用 academic-thesis-review-skill 对论文进行深度评审：
+  论文文件：{WORKSPACE_ROOT}/论文_{题目}_v1.0_O_chapter3_4.md
+  执行3轮评审（Round 1宏观结构/Round 2分章节深度/Round 3跨章节一致性）
+  输出文件：{WORKSPACE_ROOT}/论文_{题目}_v2.0_review_results_O.md",
+  taskName="deep_review_o")
+```
+
+**输出物：**
+```
+review_results_H.md（版本H的学术深度评审报告）
+review_results_O.md（版本O的学术深度评审报告）
+```
+
+**与 Phase 3 的区别：**
+- Phase 3：格式+大纲+内容准确性审核（快速结构化）
+- Phase 3.5：学术深度评审（论证逻辑、引用规范性、学术写作规范）
+
+**两者互补，不替代。MBA/MEM/MPA 论文必须执行 Phase 3.5。**
 
 ### Phase 4：整合与升华
 
