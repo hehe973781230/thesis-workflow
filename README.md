@@ -1,124 +1,79 @@
-# MBA Thesis Workflow
+# MBA/学术论文多Agent协作工作流
 
-MBA 论文写作辅助 Skill，支持双版本对比（Hermes + OpenClaw）、多阶段审核、格式整改、Word 输出与邮件发送。
+📝 多Agent协作完成MBA/学术论文写作的完整工作流，支持双版本起草、审核、整合、定稿。
 
-## 安装
+适用于开题报告到毕业论文的全流程。
 
-### 方式一：手动安装
+## 核心功能
 
-```bash
-# 1. 复制到 skills 目录
-cp -r mba-thesis-workflow ~/.openclaw/workspace/skills/
+- **双版本起草**：版本H（Hermes深度逻辑链）+ 版本O（OpenClaw格式规范）
+- **Phase 3 审核**：7个维度严格审核（格式/大纲/内容准确性/查重/学术规范/文献完整/写作语法）
+- **Phase 3.5 学术深度评审**：3轮深度审查（宏观结构→分章节→跨章节一致性）
+- **Phase 4 整合**：Review Agent 出整合方案，OpenClaw 执行
+- **Phase 5 Word输出**：md2docx_strict.py 合规脚本，中英文分离字体
 
-# 2. 填写配置
-cp config.template config.env
-# 编辑 config.env，填入实际值
+## 适用场景
 
-# 3. 确认依赖 skill 已安装
-openclaw skills check
-```
+- MBA毕业论文（战略管理/企业分析类）
+- 学术研究报告（竞争战略/行业分析类）
+- 需要多轮审核、多版本整合的正式长文
 
-### 方式二：打包安装
+## 快速开始
 
-```bash
-# 解压到 skills 目录
-tar -xzf mba-thesis-workflow.tar.gz
-cp -r mba-thesis-workflow ~/.openclaw/workspace/skills/
-```
-
-## 配置
-
-首次使用前需要填写 `config.env`：
+### 方式一：直接安装
 
 ```bash
-WORKSPACE_ROOT=~/.openclaw/workspace
-USER_EMAIL=your_email@example.com
-SENDER_EMAIL=your_qq_email@qq.com
-AUTHOR_NAME=你的姓名
+openclaw skills install git:hehe973781230/thesis-workflow
 ```
 
-### 配置说明
+### 方式二：ClawHub
 
-| 变量 | 说明 | 示例 |
-|------|------|------|
-| `WORKSPACE_ROOT` | 论文文件的存放目录 | `~/.openclaw/workspace` |
-| `USER_EMAIL` | 论文终稿发送目标邮箱 | `student@uni.edu.cn` |
-| `SENDER_EMAIL` | 发件邮箱（QQ邮箱） | `123456789@qq.com` |
-| `AUTHOR_NAME` | 作者姓名 | `张三` |
-
-## 使用流程
-
-### Phase 1：写作任务书签订
-
-与 AI 对话确认：
-- 论文题目、大纲结构
-- 邮箱地址
-- 特殊要求
-
-### Phase 2：双版本起草
-
-- **版本O**：OpenClaw subagent 执行
-- **版本H**：Hermes CLI 执行（若 Hermes 不可用则自动回退到 OpenClaw）
-
-### Phase 3：审核
-
-- Review Agent 审核版本O
-- Review Agent 审核版本H
-
-### Phase 4：整合
-
-- 生成整合方案
-- 执行格式整改（清除加粗、三线表、引用标注）
-
-### Phase 5：终审与输出
-
-- 最终审核
-- Word 文档输出（符合 MBA 格式）
-- 邮件发送至 `USER_EMAIL`
-
-## 依赖
-
-### 必须
-
-- `academic-research` skill（学术文献搜索）
-- `multi-search-engine` skill（行业数据搜索）
-
-### 可选
-
-- `hermes` CLI（若安装则使用双版本模式，否则回退到单 OpenClaw 版本）
-
-### 环境要求
-
-- Python 3.11+
-- python-docx 库
-
-## 常见问题
-
-### Q: Hermes 不可用时会怎样？
-A: 自动检测 Hermes 可用性，不可用时回退到 OpenClaw subagent 执行版本H的任务。
-
-### Q: 邮件发送失败怎么办？
-A: 检查 `config.env` 中的 `SENDER_EMAIL` 是否正确，以及 QQ 邮箱 SMTP 授权码是否有效。
-
-### Q: 如何查看生成进度？
-A: 在工作区目录下执行 `ls -la 论文_A公司_v*.md` 查看各章节文件状态。
-
-## 目录结构
-
-```
-mba-thesis-workflow/
-├── SKILL.md              # 主配置
-├── README.md             # 本文件
-├── config.template       # 配置模板
-└── scripts/
-    └── md2docx_strict.py # Word转换脚本
+```bash
+openclaw skills search "mba thesis workflow"
+openclaw skills install <slug>
 ```
 
-## 更新日志
+## 工作流程
 
-### v1.0.0 (2026-05-31)
-- 初始版本
-- 支持双版本对比（Hermes + OpenClaw）
-- 支持多阶段审核与整合
-- 支持 Word 格式输出与邮件发送
-- Hermes 不可用时自动回退到 OpenClaw
+```
+用户 → Phase 1（确认清单）→ Phase 2（双版本起草）→ Phase 2.5（用户确认）
+     → Phase 3（审核）→ Phase 3.5（学术深度评审）→ Phase 4（整合）→ Phase 5（终审定稿）
+```
+
+## 版本说明
+
+| 版本 | 说明 |
+|------|------|
+| v1.0_*_H_*.md | Hermes版本（深度逻辑链） |
+| v1.0_*_O_*.md | OpenClaw版本（格式规范） |
+| v2.0_审核*.md | 审核报告 |
+| v3.0_整合版.docx | 整合版Word |
+| v4.0_终稿.docx | 终稿Word |
+
+## 写作规范
+
+- **引用格式**：GB/T 7714 作者年制（作者, 年）
+- **正文字数**：≥3.5万字
+- **写作语法**：正文段落禁止 `**加粗**` 强调术语
+- **中文字体**：宋体12磅，行距20磅
+- **英文字体**：Times New Roman
+- **标题字体**：黑体16磅/14磅/13磅
+
+## 技术栈
+
+- OpenClaw subagent (sessions_spawn)
+- Hermes CLI (深度推理)
+- academic-thesis-review-skill (学术深度评审)
+- md2docx_strict.py (Word转换)
+
+## 开源协议
+
+MIT-0 - 免费使用、修改和分发，无需署名
+
+## 作者
+
+GitHub: [hehe973781230](https://github.com/hehe973781230)
+
+---
+
+*如果这个skill对你有帮助，请给个 ⭐*
