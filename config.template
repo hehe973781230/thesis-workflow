@@ -1,0 +1,21 @@
+# MBA Thesis Workflow - Configuration Template
+# 复制此文件为 config.env 并填写实际值
+
+# 工作区根目录（skill输出文件的存放位置）
+# 示例：~/.openclaw/workspace
+WORKSPACE_ROOT=~/.openclaw/workspace
+
+# 用户邮箱（发送论文终稿的目标地址）
+# 示例：student@university.edu.cn
+USER_EMAIL=
+
+# 发件邮箱（用于发送邮件的QQ邮箱）
+# 示例：yourname@qq.com
+SENDER_EMAIL=
+
+# 作者姓名（用于论文封面）
+# 示例：张三
+AUTHOR_NAME=
+
+# Hermes 安装路径（可选，若留空则自动检测）
+# HERMES_BIN=
