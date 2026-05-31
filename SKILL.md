@@ -310,7 +310,15 @@ md2docx 转换脚本需满足以下要求，否则会在 Word 中产生视觉噪
 **目标：** 最终审核通过后交付正式文档。
 
 
-**⚠️ Word输出说明：** 如无 `scripts/md2docx_strict.py` 合规脚本，Phase 5 输出的 Word 文档需人工调整格式（分页、三线表、字体行距等）。建议优先使用学术格式工具或手动按格式维度调整。
+**⚠️ Word输出说明：** Phase 5 必须使用 `scripts/md2docx_strict.py` 合规脚本，命令：
+```bash
+python3 scripts/md2docx_strict.py <input.md> <output.docx>
+```
+脚本支持：
+- 中英文分离字体（中文黑体/宋体，英文Times New Roman）
+- 三线表（无竖线）
+- 每章后分页符
+- 行距20磅
 
 **终审检查项：**
 1. 所有审核问题已修复（无🔴项）
