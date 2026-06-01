@@ -22,5 +22,6 @@ jobs:
     with:
       owner: hehe973781230
       dry_run: false
+      root: "."
     secrets:
       clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}
