@@ -4,10 +4,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   dry-run:
     if: github.event_name == 'pull_request'
-    permissions: read-all
     uses: openclaw/clawhub/.github/workflows/skill-publish.yml@main
     with:
       owner: hehe973781230
@@ -15,9 +18,6 @@ jobs:
 
   publish:
     if: github.event_name == 'workflow_dispatch'
-    permissions:
-      id-token: write
-      contents: read
     uses: openclaw/clawhub/.github/workflows/skill-publish.yml@main
     with:
       owner: hehe973781230
