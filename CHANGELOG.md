@@ -6,6 +6,9 @@
 
 ### 新增功能
 
+- **Phase 5.1 可选去AI味**：新增 HumanizerAgent，调用 humanize-chinese skill 执行学术风格降重，支持 CLI 脚本批量处理 + 差异报告
+- **Phase 5.2 Word生成**：拆分独立步骤，支持生成两份Word（原版 + 润色后版）
+- **前置检测机制**：去AI味前自动检测 humanize-chinese skill 是否安装，未安装则提示用户确认后自动安装
 - **Phase 2 执行前检查表**：每次启动 Phase 2 前强制确认，包括 Phase 1 七项清单、章节×版本对照表、完成判定标准
 - **章节×版本对照表**：枚举每个章节的 Executor（版本O）和 Hermes（版本H）要求，明确「必须」spawn，不可遗漏
 - **Phase 2 强制检索要求**：新增5项强制检索检查项（PESTEL分析前/五力模型前/战略理论前/引用来源/检索记录≥3次），不满足则打回补充
@@ -13,9 +16,15 @@
 - **正文目录章节禁止规则**：写作规范新增，明确禁止在正文章节内自建「目录」章节
 - **md2docx_strict.py 审核报告模糊匹配**：支持 `审核报告*.md` 命名规范模糊匹配（Level 1精确/Level 2模糊/Level 3候选列表）
 
+### 移除功能
+
+- **移除邮件发送流程**：Phase 5.2 改为仅生成Word并告知存储位置（`~/.openclaw/workspace/`）
+- **移除联系方式必填**：Phase 1 确认清单去掉联系方式（微信/飞书ID）要求，去AI味后由用户自行取用文件
+- **删除 Phase 5.5 成果发送**：整节移除，减少不必要的流程节点
+
 ### 架构升级
 
-- **Agent 角色体系重构**：Orchestrator（调度）/ Executor（H-generator执行）/ Reviewer（规则型审核）/ DeepReviewer（学术深度评审）/ Integrator（整合方案）/ WordAgent（Word输出）六类专职分离
+- **Agent 角色体系重构**：Orchestrator（调度）/ Executor（H-generator执行）/ Reviewer（规则型审核）/ DeepReviewer（学术深度评审）/ Integrator（整合方案）/ WordAgent（Word输出）/ HumanizerAgent（去AI味）七类专职分离
 - **Agent 设计原则**：职责单一化，调度者不执行，执行者不调度；职责边界清晰
 - **Phase 3.5 固定节点**：Phase 3 完成即触发，不得跳过，作为固定流程节点
 - **Phase 3.5 分级标准**：P0（致命）/ P1（严重）/ P2（建议），审核报告结构化分级
