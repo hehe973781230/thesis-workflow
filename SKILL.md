@@ -1,11 +1,67 @@
 ---
 name: mba-thesis-workflow
-version: 1.4.0
-description: 多Agent协作完成MBA/学术论文写作的完整工作流，支持双版本起草、审核、整合、定稿。适用于开题报告到毕业论文的全流程。
+version: 1.6
+description: 多Agent协作完成MBA/学术论文写作的完整工作流，支持双版本起草、审核、整合、定稿。适用于开题报告到毕业论文的全流程。**⚠️强制触发（禁止绕过）：生成论文Word文档时，必须先执行 Review Agent 终审 → 格式自检 → 调用 md2docx_strict.py → 通过当前沟通渠道（飞书/微信）发送，三步缺一不可。**
+
+**⚠️ 硬性前置条件：**
+- 公司信息映射表（A公司=真实公司名）**必须填写**，未提供则流程中断，不得流转至 Phase 2
+- 联系方式（微信/飞书ID）**必须填写**，未提供则无法发送阶段成果，流程中断
+
+**⚠️ 阶段强制顺序规则：**
+- 全部7个 Phase **必须按顺序执行，不得跳过任何一个 Phase**
+- Phase 1 → Phase 2 → Phase 2.5 → Phase 3 → Phase 3.5 → Phase 4 → Phase 5
+- Phase 3.5 是固定节点，Phase 3 完成即触发，**不得跳过**
+- Phase 2.5 是人工确认门槛，**不得跳过**
+
+**⚠️ 检索工具同步规则（所有 Phase 适用）：**
+- 执行过程中，无论哪个 Phase，只要调用了数据查询工具（multi-search-engine / academic-research / arxiv-search-collector），就必须同步输出：
+  1. 调用的检索工具名称
+  2. 检索关键词/查询条件
+  3. 查询结果摘要（关键数据点/关键文献名称）
+- 同步方式：每完成一次检索操作，立即向用户汇报结果（<50字，简短同步）
+- 大型检索（如行业数据批量查询）完成后须输出结构化结果摘要
+
+**⚠️ Phase 2 强制检索要求：**
+> 以下要求必须全部满足，Phase 2 完成判定时检查，不满足则打回补充。
+
+- [ ] 第3章PESTEL分析前 → 必须调用 web_search 搜索「中国国际教育市场规模/趋势/政策」，提取1-2个具体数据点
+- [ ] 第3章五力模型分析前 → 必须调用 web_search 搜索「G5申请培训/国际竞赛培训 竞争对手」，提取竞品信息
+- [ ] 战略理论部分 → 必须调用 academic-research 搜索「竞争战略理论 小微教育机构 应用」，提取1-2篇文献
+- [ ] 每章至少1个引用标注具体来源（非泛泛而谈）
+- [ ] 全文「检索记录」出现次数 ≥ 3次
+- [ ] 检索记录格式（每次检索后必须输出）：
+  ```
+  【检索记录】
+  工具：xxx
+  关键词：xxx
+  结果：xxx条相关，数据来源：xxx，置信度：高/中/低
+  ```
+
+**通知机制：**
+- 每步完成 → 同步简短结果（<50字）
+- 出现问题 → 立即告知用户
+- 单任务超过5分钟 → 同步进度
+- 发送方式：根据当前对话渠道（飞书→飞书，微信→微信），由 OpenClaw 自动路由
 metadata: {"clawdbot":{"emoji":"📝","requires":{},"os":["linux","darwin","win32"]}}
 ---
 
 # MBA/学术论文多Agent协作工作流
+
+## ⚠️ 触发规则（必须遵守）
+
+
+**当用户请求生成 Word 文档且满足以下任一条件时，必须调用本 skill 的 Word 输出流程，不得使用简单 md2docx 脚本：**
+
+- 输入文件路径匹配：`论文*.md`、`论文*.md`、`*thesis*.md`、`*dissertation*.md`
+- 上下文中存在「论文」「MBA」「答辩」「开题」等关键词
+- 用户明确要求导出 `.docx` 格式且文件性质为学术论文
+
+**禁止的行为：**
+- ❌ 用简单 ~50行 Python 脚本直接 md→docx 转换论文文件
+- ❌ 跳过 Review Agent 终审直接输出 Word
+- ❌ 不检查格式规范（分页/三线表/标题层级/加粗过滤）就交付
+
+**正确流程：** 写作语法预检 → Review Agent 终审 → 合规 md2docx 转换 → Word 输出
 
 ## 适用场景
 
@@ -18,39 +74,114 @@ metadata: {"clawdbot":{"emoji":"📝","requires":{},"os":["linux","darwin","win3
 ```
 用户（决策者）
     ↓
-Phase 1  →  OpenClaw 出「确认清单」→ 用户逐项确认 ✅
-    ↓
-Phase 2  →  全章节单版起草 + 核心章节双版本对比
-    ↓  (Hermes CLI + OpenClaw subagent 并行)
+Phase 1  →  Orchestrator 出「确认清单」→ 用户逐项确认 ✅
+    ↓  ⚠️ 公司映射/联系方式未填写则流程中断
+Phase 2  →  H-generator（Hermes）起草版本H
+           Executor subagent 起草版本O
+    ↓  ⚠️ Phase 2.5 前不得跳过任何阶段
 Phase 2.5→  用户确认章节内容 → 再送审 ✅
-    ↓
-Phase 3  →  Review Agent 审核双版本 → 输出审核报告H + 审核报告O
-    ↓
-Phase 4  →  Review Agent 出整合方案 → OpenClaw 执行整合
-    ↓
-Phase 5  →  终审 → 满足终止条件 → 最终Word文档交付
+    ↓  ⚠️ 此阶段不得跳过
+Phase 3  →  Reviewer 审核双版本 → 输出审核报告H + 审核报告O
+    ↓  ⚠️ Phase 3.5 前不得跳过
+Phase 3.5→  DeepReviewer 深度学术评审（P0/P1/P2分级）← ⚠️ 固定节点，Phase 3 完成即触发，不得跳过
+    ↓  ⚠️ 此阶段不得跳过
+Phase 4  →  Integrator 出整合方案 → Orchestrator 执行整合
+    ↓  ⚠️ 此阶段不得跳过
+Phase 5  →  Reviewer 终审 → WordAgent 调用 md2docx_strict.py → 发送
 ```
+
+## Agent 设计原则（职责单一化）
+
+**⚠️ 核心原则：每个 Agent 只做一件事，泛化风险最低。**
+
+| 原则 | 说明 |
+|------|------|
+| 职责单一 | 每个 Agent 只有一个主责；多性质任务须拆分为多个 Agent |
+| 退出条件明确 | 每个 Agent 有清晰的完成标准和终止条件 |
+| 信息不跨 Agent 记忆 | Agent 间通过文件传递结果，不共享上下文 |
+| 调度者不执行 | Orchestrator 专注调度，Word 输出等执行任务交给专职 Agent |
+
+**Agent 分工（6类）：**
+
+| Agent | 调用方式 | 主责 | 泛化风险 |
+|-------|---------|------|---------|
+| **Orchestrator** | 当前 session（主持） | 调度任务/推进流程/节点决策 | 🟢 低（纯调度） |
+| **H-generator** | `exec hermes chat` | 版本H起草（深度逻辑链） | 🟢 低（单一任务） |
+| **Executor** | `sessions_spawn` | 版本O起草 + 格式执行 | 🟢 低 |
+| **Reviewer** | `sessions_spawn` | Phase 3/5 规则型快速审核 | 🟢 低 |
+| **DeepReviewer** | `sessions_spawn` | Phase 3.5 学术深度评审 | 🟢 低 |
+| **Integrator** | `sessions_spawn` | Phase 4 整合方案设计 | 🟢 低 |
+| **WordAgent** | `exec python3` | md2docx_strict.py 执行 + 发送 | 🟢 低 |
+
+**⚠️ 不允许的模式：**
+- ❌ Orchestrator 自己做执行工作（调度+起草+整合+Word输出 全混在一起）
+- ❌ Review Agent 承接 Phase 3/3.5/4/5 四种性质完全不同的任务
+- ❌ 同一个 Agent 在不同 Phase 多次重建 prompt（应复用定义）
+
+**泛化风险来源：** Agent 职责越多 → 注意力被稀释 → 各任务质量下降 → 需要更多审核轮次弥补 → 效率降低。遵循「职责单一」原则可有效控制。
 
 ## 关键实现说明
 
 ### 版本H的调用方式（H是关键区分）
 
-**版本H（Hermes）** 必须通过 `exec hermes chat` 调用真实Hermes Agent，不走 `sessions_spawn`。
+**⚠️ 首先检测 Hermes 可用性：**
+
+```bash
+# 检测 Hermes 是否安装并可用
+if hermes --version &>/dev/null 2>&1; then
+  AGENT_TYPE="hermes"
+  echo "Hermes 可用，使用版本H（Hermes CLI）执行"
+else
+  AGENT_TYPE="openclaw"
+  echo "Hermes 不可用，回退到 OpenClaw 单版本执行"
+fi
+```
+
+**版本H（Hermes可用时）** 通过 `exec hermes chat` 调用真实Hermes Agent：
 
 **正确调用方式：**
 ```bash
-hermes chat -q "<完整写作任务>" -Q --max-turns 30
+exec hermes chat -q "<完整写作任务>" -Q --max-turns 30
+```
+
+**版本H（Hermes不可用时 → 回退到OpenClaw）** 通过 `sessions_spawn` 启动subagent执行，prompt中同样包含数据查询工具说明：
+
+```bash
+# Hermes 不可用时的等效执行
+sessions_spawn(mode="run", runtime="subagent", 
+  task="<写作任务，包含数据查询工具说明>", 
+  taskName="xxx")
 ```
 
 **写入文件的方式（重要）：**
-在prompt里指定输出路径，让Hermes直接写文件：
+在prompt里指定输出路径，让Agent直接写文件：
 ```bash
-hermes chat -q "...
-保存到文件：/Users/hehe9737/.openclaw/workspace/论文_A公司_v1.0_H_chapter3_4.md
+exec hermes chat -q "...
+保存到文件：{{WORKSPACE_ROOT}}/论文_A公司_v1.0_H_chapter3_4.md
 ..." -Q --max-turns 30
+# 或者 OpenClaw 回退时：
+sessions_spawn(..., task="...保存到文件：{{WORKSPACE_ROOT}}/论文_A公司_v1.0_H_chapter3_4.md...", ...)
 ```
 
-**原因：** Hermes CLI直接输出文字，无法通过sessions机制传递结果给后续流程，所以必须让Hermes自己把结果写入指定文件路径。
+**⚠️ 必须在prompt中显式告知可调用的数据查询工具：**
+
+```
+【数据查询工具】（按需主动调用，不要只靠内部知识）
+- multi-search-engine — 行业数据、企业信息、市场规模、新闻事件（无需API Key）
+  调用方式：web_search 或直接描述搜索需求
+- academic-research — 学术文献搜索、文献综述、引用分析（OpenAlex 2.5亿+论文）
+  调用方式：python3 scripts/scholar-search.py search "关键词"
+- arxiv-search-collector — 追踪最新学术论文（arXiv）
+  调用方式：arxiv-search-collector skill
+
+【调用原则】
+- 起草阶段：优先用 multi-search-engine 查行业数据、市场规模、企业背景
+- 理论框架/文献综述：优先用 academic-research 搜学术论文
+- 前沿研究/最新进展：优先用 arxiv-search-collector 追踪arXiv论文
+- 每个数据/引用都必须标注来源，说明用了哪个工具查询得到
+```
+
+**原因：** Hermes CLI直接输出文字，无法通过sessions机制传递结果给后续流程，所以必须让Agent自己把结果写入指定文件路径。Hermes不可用时，OpenClaw subagent执行相同逻辑，结果写入同一文件路径。
 
 ### 版本O的调用方式
 
@@ -68,10 +199,15 @@ sessions_spawn(mode="run", runtime="subagent", task="<写作任务>", ...)
 | `arxiv-search-collector` | 追踪最新学术论文（arXiv） | 初始化后批量抓取，适合前沿主题 |
 
 **嵌入节点建议：**
-- **Phase 1**（确认清单出具前）→ 用 `academic-research` 搜理论框架、确认研究定位
-- **Phase 2**（起草时）→ 用 `multi-search-engine` 查行业数据、市场规模、企业信息
+- **Phase 1**（确认清单出具前）→ 用 `academic-research` 搜理论框架、确认研究定位；用 `multi-search-engine` 查公司公开信息（年报/官网/行业报告）
+- **Phase 2**（起草时）→ 用真实公司名查行业数据、市场规模、企业信息；数据填入论文时将公司名替换为代号（如A公司）
 - **Phase 2.5/3**（用户确认/审核时）→ 用 `arxiv-search-collector` 补充文献引用
 - **Phase 4**（整合时）→ 填补数据空白或更新过时数据
+
+**⚠️ 公司信息处理原则：**
+- 用真实公司名搜索可验证的公开数据（年报、财报、行业报告、新闻）
+- 填入论文正文时，将真实公司名替换为代号（A公司/B公司等），映射关系不进入最终文档
+- 搜索 prompt 中使用真实公司名，输出 prompt 中使用代号
 
 ---
 
@@ -89,7 +225,8 @@ sessions_spawn(mode="run", runtime="subagent", task="<写作任务>", ...)
 | 维度 | 内容 | 备注 |
 |------|------|------|
 | 论文基本信息 | 题目/作者/学号/专业/学位类型/答辩年份 | 红色星标项 |
-| **联系方式** | **邮箱地址**（必填，用于发送阶段成果） | ⭐ 未提供则无法流转至 Phase 2 |
+| **联系方式** | ⭐ **微信或飞书ID（必填，用于发送阶段成果和终稿Word）** | ⭐ 未提供则无法流转至 Phase 2 |
+| **公司信息映射表** | ⭐ **实际公司名称（必填，用于数据检索；论文正文中使用代号A公司/B公司）** | 用代号代替，如：A公司=真实公司名 |
 | 大纲结构 | 7章大纲逐章确认保留/修改/增删 | 红色星标项 |
 | 写作标准 | 字数(≥3.5万)/引用格式(GB\/T7714作者年制)/语言风格 | — |
 | 审核维度 | 格式/大纲/内容准确性/查重风险/学术规范/完整性 | — |
@@ -97,7 +234,8 @@ sessions_spawn(mode="run", runtime="subagent", task="<写作任务>", ...)
 | 特殊要求 | 导师偏好/行业敏感点/竞品回避要求 | — |
 
 3. **用户逐项确认**（红色星标项必填）
-   - ⭐ **邮箱地址未填写时，必须提醒用户提供**，否则后续阶段成果无法发送至用户，流程在此中断
+   - ⭐ **联系方式未填写时，必须提醒用户提供**，否则后续阶段成果无法发送至用户，流程在此中断
+   - ⭐ **实际公司名称未填写时，必须提醒用户提供**，公司名称仅用于数据检索，正文以代号（A公司/B公司）呈现，不进入公开文档；未提供则无法进入 Phase 2 数据搜集阶段
 4. **生成「写作任务书」** → 用户签收 → 进入 Phase 2
 
 **⚠️ 硬规则：不确认不动笔。Phase 1 是守门人。**
@@ -108,6 +246,36 @@ sessions_spawn(mode="run", runtime="subagent", task="<写作任务>", ...)
 
 **目标：** 完成全章节初稿，核心章节双版本对比。
 
+---
+
+## ⚠️ Phase 2 执行前检查（强制，逐项确认后方可启动）
+
+> 每次启动 Phase 2 前，Orchestrator 必须逐项确认，不得跳过。
+
+- [ ] 确认已完成 Phase 1 七项确认清单（公司映射✅ / 联系方式✅ / 大纲✅）
+- [ ] 确认 Hermes 可用（`hermes --version`）
+- [ ] 确认 Executor 可用（`sessions_spawn` 测试）
+
+### 章节×版本对照表（必须全部 spawn，不得遗漏）
+
+| 章节 | Executor（版本O） | Hermes（版本H） | 说明 |
+|------|-----------------|----------------|------|
+| 第1、2、7章 | ✅ 必须起草 | ❌ 不需要 | 基础章节，单版本即可 |
+| 第3章 | ✅ 必须起草 | ✅ 必须起草 | **核心章节**，双版本对比 |
+| 第4章 | ✅ 必须起草 | ✅ 必须起草 | **核心章节**，双版本对比 |
+| 第5章 | ✅ 必须起草 | ✅ 必须起草 | **核心章节**，双版本对比 |
+| 第6章 | ✅ 必须起草 | ✅ 必须起草 | **核心章节**，双版本对比 |
+
+> ⚠️ **每个「✅ 必须起草」都是一个独立的 `sessions_spawn` / `hermes chat` 调用，不得合并。**
+> 若只完成其中一个，视为 Phase 2 未完成，禁止进入 Phase 2.5。
+
+**Phase 2 完成判定标准（全部满足方可进入 Phase 2.5）：**
+- 版本O文件存在：第1-7章全部（ls 验证）
+- 版本H文件存在：第3-6章全部（ls 验证）
+- 任意一个文件缺失 → Phase 2 判定为**未完成**，禁止送审
+
+---
+
 **分工原则：**
 - **所有章节** → 各出一份单版初稿
 - **核心章节（通常第3-5章，战略分析类）** → 额外双版本：
@@ -116,11 +284,52 @@ sessions_spawn(mode="run", runtime="subagent", task="<写作任务>", ...)
 
 **执行方式：**
 ```bash
-# 版本H：真实调用Hermes CLI
-hermes chat -q "<任务>" -Q --max-turns 30 &
+# 首先检测 Hermes 可用性
+if hermes --version &>/dev/null 2>&1; then
+  AGENT_TYPE="hermes"
+  echo "Hermes 可用，使用版本H（Hermes CLI）执行"
+else
+  AGENT_TYPE="openclaw"
+  echo "Hermes 不可用，回退到 OpenClaw 单版本执行"
+fi
 
-# 版本O：OpenClaw subagent
+# 版本H：Hermes可用时使用Hermes CLI，不可用时回退到OpenClaw subagent
+if [ "$AGENT_TYPE" = "hermes" ]; then
+  # Hermes CLI（prompt中必须包含数据查询工具说明，见上文）
+  exec hermes chat -q "<任务，包含数据查询工具说明>" -Q --max-turns 30
+else
+  # OpenClaw subagent（Hermes不可用时的回退路径）
+  sessions_spawn(mode="run", runtime="subagent", task="<任务，包含数据查询工具说明>", taskName="xxx")
+fi
+
+# 版本O：OpenClaw subagent（始终使用）
 sessions_spawn(mode="run", runtime="subagent", task="<任务>", taskName="xxx")
+```
+
+**⚠️ 版本H的prompt模板（可直接套用）：**
+```
+请为论文《{题目}》撰写第{章号}章内容。
+
+【写作任务】
+{具体写作要求}
+
+【数据查询工具】（按需主动调用）
+- multi-search-engine — 行业数据、企业信息、市场规模、新闻事件
+  调用方式：描述搜索需求，让系统执行搜索
+- academic-research — 学术文献搜索（OpenAlex 2.5亿+论文）
+  调用方式：python3 ~/.openclaw/workspace/skills/academic-research/scripts/scholar-search.py search "关键词"
+- arxiv-search-collector — 追踪最新学术论文
+  调用方式：使用arxiv-search-collector skill
+
+【写作要求】
+- 每个数据/引用必须标注来源，说明用了哪个工具查询得到
+- 引用他人观点时必须paraphrase，禁止直接复制原文
+- **格式规范（必须严格遵守，否则Word转换会出错）：**
+  - 章节标题：`# 第X章` / `## X.X` / `### X.X.X`，**禁止用 `## 第X章`/`### 第X.X` 混合格式**
+  - **参考文献：必须用 `## 参考文献`，不得用 `### 参考文献` 或 `# 参考文献`**
+  - 正文段落不得用 `**加粗**` 强调术语
+  - 表格标题放在表格上方，不加粗
+- 写完后保存到：{文件路径}
 ```
 
 **输出物（Phase 2完成后应存在）：**
@@ -130,6 +339,48 @@ sessions_spawn(mode="run", runtime="subagent", task="<任务>", taskName="xxx")
 论文_A公司_v1.0_O_chapter3_4.md      （OpenClaw subagent写出）
 论文_A公司_v1.0_O_chapter5_6.md      （OpenClaw subagent写出）
 论文_A公司_v1.0_chapter1_2_7.md      （OpenClaw subagent写出，单版本）
+```
+
+**⚠️ 状态文件机制（防中断）**：
+每次 Phase 2 启动时，在 `~/.openclaw/workspace/` 目录下创建/更新任务状态文件 `论文_{题目}_任务状态.json`：
+```json
+{
+  "paper": "{论文标题}",
+  "version": "v1.0",
+  "phase": "Phase 2",
+  "started_at": "YYYY-MM-DD HH:MM",
+  "last_updated": "YYYY-MM-DD HH:MM",
+  "chapters": {
+    "chapter1_2_7": {"status": "completed", "file": "...", "lines": 0},
+    "chapter3_4": {"status": "completed", "file": "...", "lines": 0},
+    "chapter5_6": {"status": "pending", "file": null, "lines": 0}
+  },
+  "planned_chapters": ["chapter1_2_7", "chapter3_4", "chapter5_6"],
+  "next_action": "补写 chapter5_6"
+}
+```
+- **创建时机**：Phase 2 第一个 subagent 启动时
+- **更新时机**：每个章节文件写入完成后立即更新 `status="completed"` 和 `file`/`lines`
+- **读取时机**：每次 session 开始时（见 AGENTS.md "每次 Session 开始时"步骤），优先检查同目录是否存在 `*_任务状态.json`，若有则加载并告知用户未完成任务
+- **删除时机**：Phase 2 全部章节完成后（验证通过），删除状态文件或标记 `phase": "Phase 2 完成"
+
+
+**章节完整性自动校验（强制步骤）**：
+Phase 2 最后一个 subagent 完成后，立即执行以下校验，**全部通过方可进入 Phase 3**：
+```bash
+# 伪代码
+for ch in planned_chapters:
+    if not os.path.exists(f"{paper_prefix}_{ch}.md"):
+        abort("❌ 缺失章节: {ch}，无法进入 Phase 3")
+
+# 字数门槛校验
+for ch_file in chapter_files:
+    lines = count_lines(ch_file)
+    if lines < 100:  # 低于此行数认为内容不足
+        abort("❌ {ch_file} 内容不足（{lines}行），请补充")
+
+
+print("✅ 章节完整性校验通过：N/N 章存在，内容充足")
 ```
 
 **起草约束（前置查重）：**
@@ -143,8 +394,10 @@ sessions_spawn(mode="run", runtime="subagent", task="<任务>", taskName="xxx")
 
 | 语法元素 | 正确用法 | 错误用法（会导致排版问题） |
 |---------|---------|--------------------------|
-| 章节标题 | 使用 `# ` / `## ` / `### ` 层级 | 不要用 `**` 包裹标题文字 |
+| 章节标题 | 使用 `# 第X章` / `## X.X` / `### X.X.X` 层级，**禁止使用 `## 第X章`/`### 第X.X` 等混合格式** | 不要用 `**` 包裹标题文字 |
+| **参考文献** | **必须使用 `## 参考文献`（二级节标题）**，不得使用 `### 参考文献` 或 `# 参考文献` | 参考文献是正文后的独立部分，不是章也不是普通节，与一级节同级 |
 | 列表项小标题 | 使用 `### 1.2.1 标题文字` 格式 | 不要写成 `**（1）标题**` 或 `**小节要点**` |
+| **正文目录章节** | **严禁在正文内生成「目录」章节**（如 `## 目录` / `### 目录`），正文内容应直接按层级展开，不需要在章节内部再写目录 | 目录是论文整体结构页，由md2docx在摘要后自动生成，不得在正文章节内自建目录 |
 | 正文段落 | 普通文字，首行缩进2字符 | 绝对不要在正文中使用 `**加粗**` 来强调术语 |
 | 表格标题行 | 放在表格上方，另起段落 | 表格标题不要用 `**加粗**` |
 | 图表编号说明 | 段落形式："图1.1展示了..." | 不要用 `**图1.1**` 加粗形式 |
@@ -165,6 +418,29 @@ sessions_spawn(mode="run", runtime="subagent", task="<任务>", taskName="xxx")
 - 各章节核心观点是否符合预期
 - 大方向无误后再送审
 
+**Phase 2.5 核心章节完整性自动检查（强制步骤）**：
+在展示章节内容给用户确认前，先执行自动检查，发现问题则弹窗提示，不展示确认按钮：
+```bash
+# 伪代码
+# 第5章必须包含战略选择相关关键词
+strategy_kw = ['战略选择', '竞争战略', '差异化', '集中化', '成本领先', 'QSPM']
+if not any(kw in chapter5_content for kw in strategy_kw):
+    abort("❌ 第5章未包含战略选择相关内容，请补充后再确认")
+
+# 第6章必须包含实施保障相关关键词
+protect_kw = ['实施', '保障', '组织', '人才', '财务', 'KPI', '考核']
+if not any(kw in chapter6_content for kw in protect_kw):
+    abort("❌ 第6章未包含实施保障相关内容，请补充后再确认")
+
+# 字数门槛
+if len(chapter5_content) < 2000:
+    abort(f"⚠️ 第5章字数过少（{len(chapter5_content)}字），内容可能不足")
+if len(chapter6_content) < 2000:
+    abort(f"⚠️ 第6章字数过少（{len(chapter6_content)}字），内容可能不足")
+
+print("✅ 核心章节完整性检查通过")
+```
+
 **如需大改，返回 Phase 2 对应章节重写。**
 
 ---
@@ -173,23 +449,31 @@ sessions_spawn(mode="run", runtime="subagent", task="<任务>", taskName="xxx")
 
 **目标：** Review Agent 分别对版本H 和 版本O 输出独立审核报告。
 
-**审核前准备：** Review Agent 必须先读取两个版本的完整内容，再开始审核。
-
 **审核维度（逐项打分 + 修改建议）：**
 
 #### 一、格式维度（详细标准）
 
 | 检查项 | 具体标准 |
 |--------|---------|
-| **中文字体** | 标题：黑体；正文：宋体 |
-| **英文字体** | 正文：Times New Roman；英文摘要/英文文献：Times New Roman |
-| **章标题** | 黑体16磅加粗居中，每章另起一页 |
-| **一级节标题** | 黑体14磅 |
-| **二级节标题** | 黑体13磅 |
-| **正文** | 宋体12磅，行距20磅 |
+| **封面** | ✅ 包含：学校代码/分类号/密级/UDC/论文题目/作者/专业/方向/导师/答辩日期 |
+| **原创性声明** | ✅ 含声明正文+签名栏+日期，位于封面之后、摘要之前 |
+| **中文摘要** | 标题"摘要"两字间空两格，黑体16磅加粗居中，单倍行距，段前24磅，段后18磅；内容不少于800字，宋体12磅（小四），行距20磅，段前段后0磅；关键词3-5个，格式同正文，"关键词"三字加粗，分号分隔 |
+| **英文摘要** | 标题"Abstract"，Arial 16磅加粗居中，单倍行距，段前24磅，段后18磅；内容Times New Roman 12磅，行距20磅；关键词3-5个，"Key Words"加粗，分号分隔，与中文关键词一一对应 |
+| **目录** | 标题"目录"两字间空两格，黑体16磅加粗居中，单倍行距，段前24磅，段后18磅；从绪论开始列出章节名称与页码；各章目录：宋体12磅加粗，单倍行距，段前6磅，段后6磅，两端对齐，页码右对齐；一级节：宋体12磅，左缩进1汉字；二级节：仿宋10.5磅，左缩进2汉字；自动生成，纳入1-3级标题 |
+| **正文各章标题** | "第X章 ×××"，黑体16磅加粗居中，单倍行距，段前24磅，段后18磅，章序号与章名称之间空两格，**每章另起一页** |
+| **一级节标题** | "1.2 ×××"，黑体14磅顶左，单倍行距，段前24磅，段后6磅，序号与题名之间空两格 |
+| **二级节标题** | "1.2.1 ×××"，黑体13磅，左缩进两字，单倍行距，段前12磅，段后6磅，序号与题名之间空两格 |
+| **三级节标题** | "（1）×××"，宋体12磅，左缩进两字，单倍行距，与正文同段 |
+| **正文** | 宋体12磅（英文Times New Roman 12磅），两端对齐，首行左缩进2个汉字符，段前段后0磅，**行距20磅** |
+| **图号图题** | 图号+图题置于图下方，宋体10.5磅加粗居中，单倍行距，段前6磅，段后12磅；图注左缩进两字；图中文字宋体10.5磅（英文Times New Roman 10.5磅） |
+| **表号表题** | 表号+表题置于表上方，宋体10.5磅加粗居中，单倍行距，段前6磅，段后6磅；表注左缩进两字；表中文字宋体10.5磅（英文Times New Roman 10.5磅） |
 | **表格** | 三线表（顶线、表头底线、底线），无竖线 |
-| **参考文献** | 中文在前英文在后；中文用宋体，英文用Times New Roman |
-| **页码** | 前置部分用罗马数字，正文用阿拉伯数字 |
+| **图表编号** | 阿拉伯数字分章依序连续编码，如"图1.1"、"表3.2" |
+| **注释** | **页下注**，以①②③……连续编号（不得使用上标形式的脚注） |
+| **参考文献** | 正文引用用作者年制（不得使用上标加序号形式）；文后"参考文献"标题左对齐；中文在前英文在后分别排序；中文用宋体小四号全角标点；英文用Times New Roman小四号，作者姓前名后缩写，杂志名书名斜体 |
+| **页码** | 前置部分（封面/声明/摘要/目录）用罗马数字；正文部分（从绪论起）用阿拉伯数字 |
+| **附录** | 标题格式同章标题；内容格式同正文；用大写字母A/B/C编序号（如附录A）；只有一个附录名为"附录"不编号；图表编号与正文分开如"图A.1" |
+| **致谢** | 标题"致谢"两字间空两格，格式同章标题；内容格式同正文 |
 
 #### 二、大纲维度
 
@@ -222,17 +506,7 @@ sessions_spawn(mode="run", runtime="subagent", task="<任务>", taskName="xxx")
 | 文后中文格式 | 期刊：作者：《题名》，《刊名》，年份期次；专著：作者：《书名》，出版社年份；论文集：作者：《题名》，主编，《论文集名》，出版社年份 |
 | 文后英文格式 | 作者姓写在前名缩写在后，杂志名书名斜体；同一作者同年多篇加a/b/c区分 |
 
-#### 六、文献完整性维度（新增，必须检查）
-
-
-| 检查项 | 具体标准 |
-|--------|---------|
-| 正文引用对应 | 正文每一条 `（作者, 年）` 引用，必须在文后参考文献中列出；未列出者标🔴 |
-| 参考文献格式 | 检查文后参考文献是否使用 GB/T 7714 作者年制；中文在前英文在后分别排序 |
-| 文献完整性 | Phase 2 起草时要求在对应章节末尾列出参考文献；Phase 4 整合时必须包含参考文献章节 |
-
-
-#### 七、写作语法维度
+#### 六、写作语法维度（新增）
 
 | 检查项 | 具体标准 |
 |--------|---------|
@@ -256,60 +530,88 @@ sessions_spawn(mode="run", runtime="subagent", task="<任务>", taskName="xxx")
 
 ---
 
-### Phase 3.5：深度学术评审
+### Phase 3.5 深度学术评审（固定节点）
 
-**目标：** 使用 `academic-thesis-review-skill` 对版本H 和 版本O 进行深度学术评审，补充格式审核之外的学术规范性审查。
+**⚠️ 强制执行，不得跳过。**
+
+**目标：** 使用严格学术标准对 Phase 3 审核报告进行二次审查，补充格式审核之外的学术规范性检查（逻辑链、引用规范性、数据可信度、学术创新性）。
 
 **前提：** Phase 3 审核报告已完成（审核报告H.md + 审核报告O.md）
 
 **执行方式：**
 ```bash
-# 版本H的深度学术评审
+# Phase 3：Reviewer 审核（规则型快速审核）
 sessions_spawn(mode="run", runtime="subagent",
-  task="使用 academic-thesis-review-skill 对论文进行深度评审：
-  论文文件：{WORKSPACE_ROOT}/论文_{题目}_v1.0_H_chapter3_4.md
-  执行3轮评审（Round 1宏观结构/Round 2分章节深度/Round 3跨章节一致性）
-  输出文件：{WORKSPACE_ROOT}/论文_{题目}_v2.0_review_results_H.md",
-  taskName="deep_review_h")
+  task="执行 MBA 论文 Phase 3 双版本审核，输出审核报告H 和 审核报告O。",
+  taskName="phase3_reviewer")
 
-# 版本O的深度学术评审
+# Phase 3.5：DeepReviewer 深度学术评审（独立执行）
 sessions_spawn(mode="run", runtime="subagent",
-  task="使用 academic-thesis-review-skill 对论文进行深度评审：
-  论文文件：{WORKSPACE_ROOT}/论文_{题目}_v1.0_O_chapter3_4.md
-  执行3轮评审（Round 1宏观结构/Round 2分章节深度/Round 3跨章节一致性）
-  输出文件：{WORKSPACE_ROOT}/论文_{题目}_v2.0_review_results_O.md",
-  taskName="deep_review_o")
+  task="执行 MBA 论文 Phase 3.5 深度学术评审，输出评审报告。",
+  taskName="phase3_5_deep_reviewer")
+
 ```
 
 **输出物：**
 ```
-review_results_H.md（版本H的学术深度评审报告）
-review_results_O.md（版本O的学术深度评审报告）
+审核报告_Phase3.5_深度学术评审_v1.0.md
 ```
 
-**与 Phase 3 的区别：**
-- Phase 3：格式+大纲+内容准确性审核（快速结构化）
-- Phase 3.5：学术深度评审（论证逻辑、引用规范性、学术写作规范）
+**Phase 3 vs Phase 3.5 区别：**
+- Phase 3：格式+大纲+内容准确性审核（快速结构化Review Agent）
+- Phase 3.5：学术深度评审（论证逻辑、引用规范性、数据可信度、学术写作规范）
 
-**两者互补，不替代。MBA/MEM/MPA 论文必须执行 Phase 3.5。**
+**两者互补，不替代。Phase 3.5 是固定节点，Phase 3 完成即触发。**
+
+**⚠️ 执行要点：**
+- Phase 3.5 紧接在 Phase 3 三个子审核任务完成后立即执行，不等待用户指令
+- Phase 3.5 完成后的 P0 问题清单是 Phase 4 整合修复的直接输入
+- Phase 3.5 评审报告中的「修改优先级」直接指导 Phase 4 的修复顺序
+
+---
 
 ### Phase 4：整合与升华
 
-**目标：** Review Agent 出整合方案，OpenClaw 执行整合。
+**目标：** Integrator 汇总 Phase 3 + Phase 3.5 的全部评审结果，制定整合方案，Orchestrator 执行整合。
 
-**⚠️ 参考文献章节必须整合：** 参考文献作为独立章节，不能遗漏。
-
+**⚠️ 前提输入（两份报告必须齐全）：**
+- Reviewer（Phase 3）输出：审核报告H + 审核报告O（格式/大纲/内容结构化问题清单）
+- DeepReviewer（Phase 3.5）输出：深度学术评审报告（P0/P1/P2分级，逻辑链/引用/数据可信度问题）
 
 **执行逻辑：**
-1. Review Agent 逐一分析审核报告中的每个问题
-2. 判断问题出在哪个版本
-3. 优先保留逻辑链完整、论证深入的版本
-4. 对格式规范性问题参考版本O的处理方式
-5. **不强行整合**——冲突时保留质量更高的版本
-6. 确保全文语言风格、术语体系统一
-7. **参考文献章节**：汇总两个版本的引用，格式统一（中文在前，英文在后），去重排序
+1. Integrator 读取 Phase 3 两份审核报告 + Phase 3.5 评审报告
+2. **合并去重问题清单**：同一问题被两方提及的，合并为一条，保留最高优先级
+3. 按优先级排序（P0→P1→P2）
+4. 对每个问题判断出在哪个版本，给出整合指令
+5. 优先保留逻辑链完整、论证深入的版本
+6. 对格式规范性问题参考版本O的处理方式
+7. **不强行整合**——冲突时保留质量更高的版本
+8. 确保全文语言风格、术语体系统一
 
 **⚠️ 核心原则：取长补短，但不为统一而破坏内容质量。**
+
+**Phase 4 整合后自动验证报告（强制步骤）**：
+整合脚本执行完毕后、进入 Word 输出前，自动输出结构化验证报告，未全部通过则中止 Word 输出：
+```bash
+# 伪代码
+chapters = re.findall(r'^# 第[1-7]章', content, re.MULTILINE)
+end_markers = re.findall(r'===END===', content)
+ref_pos = content.find('## 参考文献')
+ch7_pos = content.find('# 第7章 结论')
+
+report = f"""
+=== 整合版验证报告 ===
+✅ 章节数：{len(chapters)}/7
+{'✅' if not end_markers else '❌'} 合并残留：{len(end_markers)} 处
+{'✅' if ref_pos > 0 else '❌'} 参考文献：{'存在' if ref_pos > 0 else '缺失'}
+字 数：{len(content)} 字
+---
+状态：{'✅ 可进入 Word 输出' if not end_markers and len(chapters)==7 else '❌ 需修复'}
+"""
+print(report)
+if end_markers or len(chapters) != 7:
+    abort("❌ 整合版存在致命问题，停止 Word 输出")
+```
 
 ### Word 输出质量保障（新增）
 
@@ -326,48 +628,57 @@ md2docx 转换脚本需满足以下要求，否则会在 Word 中产生视觉噪
 - 表格本身不使用竖线以外的多余边框线，输出为三线表样式
 
 #### 3. 标题层级确认
-- 每章标题（`# 第X章`）后应自动插入分页符
-- `##` 标题对应"一级节标题"格式（黑体14磅，左对齐）
-- `###` 标题对应"二级节标题"格式（黑体13磅）
-- `####` 标题对应"三级节标题"格式（宋体12磅，带括号）
-
-#### 4. 参考文献特殊处理
-- 参考文献部分整体不设缩进，左对齐
-- 中文参考文献与英文参考文献之间插入空行分隔，各自按拼音/字母排序
-
-**输出物：**
-```
-论文_{题目}_v3.0_整合版.docx
-```
+- 每章标题（`# 第X章`）后应自动插入分页符（**标题后分页**，避免第一页空白）
 
 ---
 
-### Phase 5：终审与定稿
+### 规则型 vs 审核型分工原则（重要）
 
-**目标：** 最终审核通过后交付正式文档。
+**核心原则：脚本管得了的，Agent 不重复检查；脚本管不了的，Agent 才来管。**
 
+#### 规则型（脚本固定生成，Agent 跳过）
 
-**⚠️ Word输出说明：** Phase 5 必须使用 `scripts/md2docx_strict.py` 合规脚本，命令：
-```bash
-python3 scripts/md2docx_strict.py <input.md> <output.docx>
-```
-脚本支持：
-- 中英文分离字体（中文黑体/宋体，英文Times New Roman）
-- 三线表（无竖线）
-- 每章后分页符
-- 行距20磅
+| 规范项 | 处理方式 |
+|--------|---------|
+| 摘要标题"摘要" | 黑体16磅加粗居中，单倍行距，段前24磅段后18磅 |
+| 摘要内容 | 宋体12磅，行距20磅，段前段后0磅 |
+| Abstract标题 | Arial 16磅加粗居中，单倍行距，段前24磅段后18磅 |
+| 关键词/Key Words | 3-5个，对应关键词加粗 |
+| 各章标题"第X章" | 黑体16磅加粗居中，段前24磅段后18磅，章后分页 |
+| 一级节标题"1.2" | 黑体14磅，段前24磅段后6磅 |
+| 二级节标题"1.2.1" | 黑体13磅，段前12磅段后6磅 |
+| 三级节标题"（1）" | 宋体12磅，左缩进2字，与正文同段 |
+| 正文段落 | 宋体12磅，首行缩进2汉字，行距20磅 |
+| 图号/图题 | 图下方，宋体10.5磅加粗居中 |
+| 表号/表题 | 表上方，宋体10.5磅加粗居中 |
+| 三线表 | 顶线1.5磅/表头底线0.75磅/底线0.5磅，无竖线 |
+| 注释 | 页下注，①、②、③连续编号 |
+| 正文引用格式 | 作者年制（作者，2020），不得上标编号 |
+| 参考文献中英文分编+字母排序 | `_flush_refs()` 分两块写 |
+| 附录/致谢标题 | 格式同章标题 |
+| 表格标题在表格上方 | 脚本校验告警 |
+| `## 第X章` 等混合格式 | 脚本告警 |
+| `**加粗**` 正文残留 | `strip_bold()` 清除 |
 
-**终审检查项：**
-1. 所有审核问题已修复（无🔴项）
-2. 格式最终检查（按上述格式维度逐项核查）
-3. 写作语法检查（按写作语法维度逐项核查，确认无正文加粗残留）
-4. 查重率人工确认（如有条件）
-5. 字数≥3.5万字
+⚠️ **脚本已覆盖的规范，Agent 只校验输出结果是否符合预期，不重复检查。**
 
-**终止条件（同时满足）：**
-- 终审报告无🔴项（严重问题）
-- 用户最终确认
-- 查重率 < 20%（如有条件）
+#### 审核型（Agent 判断，脚本无法处理）
+
+| 审核项 | 判断说明 |
+|--------|---------|
+| 摘要内容字数≥800字 | 需全文字数统计 |
+| 关键词数量3-5个 | 数量检查 |
+| 正文字数≥3.5万字 | 需全文字数统计 |
+| 正文结构（≥3章/章≥2节/节≥2点/点≥5行） | 结构化扫描+语义判断 |
+| 参考文献在正文中有对应引用 | 全文交叉验证 |
+| 引用格式细节（期刊名斜体、年份位置、作者顺序） | 对照规范5.2逐条核对 |
+| 逻辑链完整性 | 需全文语义理解 |
+| 学术创新性 | 需领域知识 |
+| 数据可信度 | 需外部核实 |
+| 论证深度 | 需语义理解 |
+| 查重风险（连续≥30字重合） | 全文扫描 |
+
+⚠️ **脚本处理过的格式输出结果，Agent 只抽查是否按预期工作，不做全面复检。**
 
 **如需大改：**
 - 细节问题 → 打回 Phase 4 局部修改
@@ -379,6 +690,28 @@ python3 scripts/md2docx_strict.py <input.md> <output.docx>
 ```
 
 ---
+
+### Phase 5.5：成果发送（自动触发）
+
+**触发时机：** Word文档生成完成后自动执行，无需用户额外指令。
+
+**发送规则：**
+- 根据当前对话渠道（飞书/微信）自动选择发送方式
+- 由 OpenClaw 自动路由到当前 channel，用户直接在对话中收到通知和文件
+
+**发送内容：**
+- 当前进度/结果通知（简短）
+- Word 文档（生成后直接推送）
+
+**通知格式示例：**
+```
+【Phase 5 完成】论文已生成，共X章，X字。请查收附件。
+```
+
+**超时同步（>5分钟）：**
+```
+【进度同步】已进行X分钟，正在处理：XXXX
+```
 
 ## 版本命名规范
 
@@ -401,13 +734,23 @@ python3 scripts/md2docx_strict.py <input.md> <output.docx>
 - Phase 3 → Phase 4 **最多2轮**（第一轮审核→修订→第二轮审核）
 - 2轮后如仍有问题，OpenClaw 输出「剩余问题清单」，由用户人工判断优先级
 
-## Agent 分工速查
+## Agent 分工速查（v1.6 职责单一化）
 
-| Agent | 调用方式 | 职责 | 擅长的内容 |
-|-------|---------|------|-----------|
-| **Hermes** | `exec hermes chat -q "..." -Q --max-turns N`（真实CLI） | 深度推理起草（版本H） | 逻辑链完整、论证深入 |
-| **OpenClaw** | `sessions_spawn` subagent | 主持/调度/格式整合/版本O起草/最终Word输出 | 格式规范、整体把控 |
-| **Review** | `sessions_spawn` subagent | 审核评估、输出整合指令 | 质量把关、跨版本判断 |
+| Agent | 调用方式 | 主责 | 泛化风险 |
+|-------|---------|------|---------|
+| **Orchestrator** | 当前 session（主持） | 调度/推进流程/节点决策，不做执行 | 🟢 低 |
+| **H-generator** | `exec hermes chat -q "..." -Q --max-turns N` | 版本H起草（深度逻辑链） | 🟢 低 |
+| **Executor** | `sessions_spawn` subagent | 版本O起草 + 格式规范执行 | 🟢 低 |
+| **Reviewer** | `sessions_spawn` subagent | Phase 3 格式/大纲/内容快速审核；Phase 5 终审 | 🟢 低 |
+| **DeepReviewer** | `sessions_spawn` subagent | Phase 3.5 学术深度评审（P0/P1/P2分级） | 🟢 低 |
+| **Integrator** | `sessions_spawn` subagent | Phase 4 整合方案设计（判断型） | 🟢 低 |
+| **WordAgent** | 直接 exec python3 | md2docx_strict.py 执行 + 发送通知 | 🟢 低 |
+
+**⚠️ 旧版（v1.5）的问题：**
+- OpenClaw 承担 调度 + 版本O起草 + 格式整合 + Word输出 + 发送（5种角色）→ 🔴 高泛化风险
+- Review Agent 承接 Phase 3 + Phase 3.5 + Phase 4 + Phase 5（4种性质完全不同）→ 🔴 高泛化风险
+
+**v1.6 改进：** 职责拆分后各 Agent 单一主责，泛化风险↓，专业度↑
 
 ## 快速启动
 
