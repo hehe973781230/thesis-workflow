@@ -1,24 +1,26 @@
 ---
 name: mba-thesis-workflow
 version: 1.6
-description: 多Agent协作完成MBA/学术论文写作的完整工作流，支持双版本起草、审核、整合、定稿。适用于开题报告到毕业论文的全流程。**⚠️强制触发（禁止绕过）：生成论文Word文档时，必须先执行 Review Agent 终审 → 格式自检 → 调用 md2docx_strict.py → 通过当前沟通渠道（飞书/微信）发送，三步缺一不可。**
+description: 多Agent协作完成MBA/学术论文写作的完整工作流，支持双版本起草、审核、整合、定稿。适用于开题报告到毕业论文的全流程。**⚠️强制触发（禁止绕过）：生成论文Word文档时，必须先执行 Review Agent 终审 → [可选去AI味] → 调用 md2docx_strict.py → 通过当前沟通渠道（飞书/微信）发送，三步缺一不可。**
 
 **⚠️ 硬性前置条件：**
 - 公司信息映射表（A公司=真实公司名）**必须填写**，未提供则流程中断，不得流转至 Phase 2
-- 联系方式（微信/飞书ID）**必须填写**，未提供则无法发送阶段成果，流程中断
+
 
 **⚠️ 阶段强制顺序规则：**
 - 全部7个 Phase **必须按顺序执行，不得跳过任何一个 Phase**
-- Phase 1 → Phase 2 → Phase 2.5 → Phase 3 → Phase 3.5 → Phase 4 → Phase 5
+- Phase 1 → Phase 2 → Phase 2.5 → Phase 3 → Phase 3.5 → Phase 4 → Phase 5 → [Phase 5.1] → Phase 5.2
 - Phase 3.5 是固定节点，Phase 3 完成即触发，**不得跳过**
 - Phase 2.5 是人工确认门槛，**不得跳过**
 
 **⚠️ 检索工具同步规则（所有 Phase 适用）：**
-- 执行过程中，无论哪个 Phase，只要调用了数据查询工具（multi-search-engine / academic-research / arxiv-search-collector），就必须同步输出：
+- 执行过程中，无论哪个 Phase，只要调用了数据查询工具（web_search / academic-research），就必须同步输出：
   1. 调用的检索工具名称
   2. 检索关键词/查询条件
   3. 查询结果摘要（关键数据点/关键文献名称）
 - 同步方式：每完成一次检索操作，立即向用户汇报结果（<50字，简短同步）
+- **Subagent 同步补充**：派生子agent执行Phase 2时，prompt必须包含以下规则：
+  > 每次调用检索工具（web_search / academic-research）后，必须立即用 sessions_send 向主session发送简短同步，格式：「【检索记录】工具名/关键词/结果摘要（<50字）」，sessionKey填 `agent:dd:main`
 - 大型检索（如行业数据批量查询）完成后须输出结构化结果摘要
 
 **⚠️ Phase 2 强制检索要求：**
@@ -41,7 +43,7 @@ description: 多Agent协作完成MBA/学术论文写作的完整工作流，支�
 - 每步完成 → 同步简短结果（<50字）
 - 出现问题 → 立即告知用户
 - 单任务超过5分钟 → 同步进度
-- 发送方式：根据当前对话渠道（飞书→飞书，微信→微信），由 OpenClaw 自动路由
+- 通知方式：根据当前对话渠道（飞书→飞书，微信→微信），由 OpenClaw 自动路由
 metadata: {"clawdbot":{"emoji":"📝","requires":{},"os":["linux","darwin","win32"]}}
 ---
 
@@ -52,7 +54,7 @@ metadata: {"clawdbot":{"emoji":"📝","requires":{},"os":["linux","darwin","win3
 
 **当用户请求生成 Word 文档且满足以下任一条件时，必须调用本 skill 的 Word 输出流程，不得使用简单 md2docx 脚本：**
 
-- 输入文件路径匹配：`论文*.md`、`论文*.md`、`*thesis*.md`、`*dissertation*.md`
+- 输入文件路径匹配：`论文*.md`、`论文徐龙*.md`、`*thesis*.md`、`*dissertation*.md`
 - 上下文中存在「论文」「MBA」「答辩」「开题」等关键词
 - 用户明确要求导出 `.docx` 格式且文件性质为学术论文
 
@@ -75,7 +77,7 @@ metadata: {"clawdbot":{"emoji":"📝","requires":{},"os":["linux","darwin","win3
 用户（决策者）
     ↓
 Phase 1  →  Orchestrator 出「确认清单」→ 用户逐项确认 ✅
-    ↓  ⚠️ 公司映射/联系方式未填写则流程中断
+
 Phase 2  →  H-generator（Hermes）起草版本H
            Executor subagent 起草版本O
     ↓  ⚠️ Phase 2.5 前不得跳过任何阶段
@@ -87,7 +89,9 @@ Phase 3.5→  DeepReviewer 深度学术评审（P0/P1/P2分级）← ⚠️ 固�
     ↓  ⚠️ 此阶段不得跳过
 Phase 4  →  Integrator 出整合方案 → Orchestrator 执行整合
     ↓  ⚠️ 此阶段不得跳过
-Phase 5  →  Reviewer 终审 → WordAgent 调用 md2docx_strict.py → 发送
+Phase 5  →  Reviewer 终审
+Phase 5.1 → [可选] HumanizerAgent 调用 humanize-chinese skill 去AI味 → 输出差异报告
+Phase 5.2 → WordAgent 调用 md2docx_strict.py 生成Word文档
 ```
 
 ## Agent 设计原则（职责单一化）
@@ -225,7 +229,7 @@ sessions_spawn(mode="run", runtime="subagent", task="<写作任务>", ...)
 | 维度 | 内容 | 备注 |
 |------|------|------|
 | 论文基本信息 | 题目/作者/学号/专业/学位类型/答辩年份 | 红色星标项 |
-| **联系方式** | ⭐ **微信或飞书ID（必填，用于发送阶段成果和终稿Word）** | ⭐ 未提供则无法流转至 Phase 2 |
+
 | **公司信息映射表** | ⭐ **实际公司名称（必填，用于数据检索；论文正文中使用代号A公司/B公司）** | 用代号代替，如：A公司=真实公司名 |
 | 大纲结构 | 7章大纲逐章确认保留/修改/增删 | 红色星标项 |
 | 写作标准 | 字数(≥3.5万)/引用格式(GB\/T7714作者年制)/语言风格 | — |
@@ -234,7 +238,7 @@ sessions_spawn(mode="run", runtime="subagent", task="<写作任务>", ...)
 | 特殊要求 | 导师偏好/行业敏感点/竞品回避要求 | — |
 
 3. **用户逐项确认**（红色星标项必填）
-   - ⭐ **联系方式未填写时，必须提醒用户提供**，否则后续阶段成果无法发送至用户，流程在此中断
+
    - ⭐ **实际公司名称未填写时，必须提醒用户提供**，公司名称仅用于数据检索，正文以代号（A公司/B公司）呈现，不进入公开文档；未提供则无法进入 Phase 2 数据搜集阶段
 4. **生成「写作任务书」** → 用户签收 → 进入 Phase 2
 
@@ -252,7 +256,7 @@ sessions_spawn(mode="run", runtime="subagent", task="<写作任务>", ...)
 
 > 每次启动 Phase 2 前，Orchestrator 必须逐项确认，不得跳过。
 
-- [ ] 确认已完成 Phase 1 七项确认清单（公司映射✅ / 联系方式✅ / 大纲✅）
+- [ ] 确认已完成 Phase 1 必填确认清单（公司映射✅ / 大纲✅）
 - [ ] 确认 Hermes 可用（`hermes --version`）
 - [ ] 确认 Executor 可用（`sessions_spawn` 测试）
 
@@ -691,87 +695,83 @@ md2docx 转换脚本需满足以下要求，否则会在 Word 中产生视觉噪
 
 ---
 
-### Phase 5.5：成果发送（自动触发）
+### Phase 5.1：去AI味（可选）
 
-**触发时机：** Word文档生成完成后自动执行，无需用户额外指令。
-
-**发送规则：**
-- 根据当前对话渠道（飞书/微信）自动选择发送方式
-- 由 OpenClaw 自动路由到当前 channel，用户直接在对话中收到通知和文件
-
-**发送内容：**
-- 当前进度/结果通知（简短）
-- Word 文档（生成后直接推送）
-
-**通知格式示例：**
+**前置检测：** 判断 humanize-chinese skill 是否已安装。
+```bash
+HUMANIZE_DIR="~/.openclaw/workspace/skills/humanize-chinese"
+if [ -d "$HUMANIZE_DIR/scripts" ]; then
+    echo "SKILL_INSTALLED"
+else
+    echo "SKILL_NOT_INSTALLED"
+fi
 ```
-【Phase 5 完成】论文已生成，共X章，X字。请查收附件。
+**分支逻辑：**
+| 状态 | 行为 |
+|------|------|
+| skill已安装 | 直接展示「去AI味」选项 |
+| skill未安装 | 展示选项但提示「需先安装」，用户确认后自动安装到 `~/.openclaw/workspace/skills/` |
+
+**自动安装命令：**
+```bash
+git clone https://github.com/example/humanize-chinese.git ~/.openclaw/workspace/skills/humanize-chinese
+```
+> ⚠️ 安全检查：安装前需确认来源可信，参考 AGENTS.md skill安装安全规则。
+
+**触发条件：** 用户勾选「去除AI味」选项时执行。
+
+**执行方式：** HumanizerAgent 调用 humanize-chinese skill 的 CLI 脚本。
+
+**执行流程：**
+
+| 步骤 | 操作 | 工具 |
+|------|------|------|
+| 1 | 检测AI痕迹评分（原文） | `detect_cn.py {源文件} -s` |
+| 2 | 学术风格降重 | `academic_cn.py {源文件} -o {润色后文件} -a --compare` |
+| 3 | 验证降重效果 | `detect_cn.py {润色后文件} -s` 确认分数下降 |
+| 4 | 生成差异报告 | `compare_cn.py {源文件}` 对比 |
+| 5 | 输出两份md文件 | 写文件 |
+
+**输出物：**
+```
+{论文名}_整合版.md                    （原文，不改动）
+{论文名}_整合版_润色后.md             （去AI味后）
+润色差异报告.md                       （差异对照）
 ```
 
-**超时同步（>5分钟）：**
-```
-【进度同步】已进行X分钟，正在处理：XXXX
-```
-
-## 版本命名规范
-
-```
-论文_{题目}_v1.0_H_chapter3_4.md        （Hermes CLI产出）
-论文_{题目}_v1.0_H_chapter5_6.md      （Hermes CLI产出）
-论文_{题目}_v1.0_O_chapter3_4.md      （OpenClaw subagent产出）
-论文_{题目}_v1.0_O_chapter5_6.md      （OpenClaw subagent产出）
-论文_{题目}_v1.0_chapter1_2_7.md      （OpenClaw subagent产出，单版本）
-论文_{题目}_v2.0_审核H.md             （审核报告）
-论文_{题目}_v2.0_审核O.md             （审核报告）
-论文_{题目}_v3.0_整合版.docx          （整合版Word）
-论文_{题目}_v4.0_终稿.docx            （终稿Word）
+**脚本路径：**
+```bash
+SKILL_DIR="~/.openclaw/workspace/skills/humanize-chinese"
+python3 $SKILL_DIR/scripts/detect_cn.py "$src" -s
+python3 $SKILL_DIR/scripts/academic_cn.py "$src" -o "$dst" -a --compare
+python3 $SKILL_DIR/scripts/detect_cn.py "$dst" -s
 ```
 
-版本号 = 整数，每次大阶段完成后 +1。
+**⚠️ 数据完整性保障：**
+- EFE/IFE/QSPM矩阵数字**不得修改**
+- 所有事实、数据、案例**保持原样**
+- 仅改表达方式，不改内容实质
 
-## 轮次规则
+---
 
-- Phase 3 → Phase 4 **最多2轮**（第一轮审核→修订→第二轮审核）
-- 2轮后如仍有问题，OpenClaw 输出「剩余问题清单」，由用户人工判断优先级
+### Phase 5.2：Word文档生成
 
-## Agent 分工速查（v1.6 职责单一化）
+**目标：** 生成Word文档并告知存储位置
 
-| Agent | 调用方式 | 主责 | 泛化风险 |
-|-------|---------|------|---------|
-| **Orchestrator** | 当前 session（主持） | 调度/推进流程/节点决策，不做执行 | 🟢 低 |
-| **H-generator** | `exec hermes chat -q "..." -Q --max-turns N` | 版本H起草（深度逻辑链） | 🟢 低 |
-| **Executor** | `sessions_spawn` subagent | 版本O起草 + 格式规范执行 | 🟢 低 |
-| **Reviewer** | `sessions_spawn` subagent | Phase 3 格式/大纲/内容快速审核；Phase 5 终审 | 🟢 低 |
-| **DeepReviewer** | `sessions_spawn` subagent | Phase 3.5 学术深度评审（P0/P1/P2分级） | 🟢 低 |
-| **Integrator** | `sessions_spawn` subagent | Phase 4 整合方案设计（判断型） | 🟢 低 |
-| **WordAgent** | 直接 exec python3 | md2docx_strict.py 执行 + 发送通知 | 🟢 低 |
+**执行步骤：**
 
-**⚠️ 旧版（v1.5）的问题：**
-- OpenClaw 承担 调度 + 版本O起草 + 格式整合 + Word输出 + 发送（5种角色）→ 🔴 高泛化风险
-- Review Agent 承接 Phase 3 + Phase 3.5 + Phase 4 + Phase 5（4种性质完全不同）→ 🔴 高泛化风险
+1. **判断去AI味选项：**
+   - 用户勾选 → 生成两份Word（Original + Polished）
+   - 用户未勾选 → 仅生成一份Word（Original）
 
-**v1.6 改进：** 职责拆分后各 Agent 单一主责，泛化风险↓，专业度↑
+2. **生成Word：**
+   ```bash
+   MD2DOCX="~/.openclaw/skills/mba-thesis-workflow/scripts/md2docx_strict.py"
+   python3 $MD2DOCX "{整合版.md}" "{论文名}_Original.docx"
+   python3 $MD2DOCX "{整合版_润色后.md}" "{论文名}_Polished.docx"
+   ```
 
-## 快速启动
+3. **告知存储位置：**
+   Word文档保存到 `~/.openclaw/workspace/` 目录，完成后告知用户具体文件路径。
 
-当用户提供开题报告或论文要求时：
 
-1. 进入 Phase 1，出具确认清单
-2. 用户确认后签收「写作任务书」
-3. 进入 Phase 2：
-   - 版本H：用 `hermes chat -q "<任务>" -Q --max-turns 30` 并通过prompt让Hermes写文件
-   - 版本O：用 `sessions_spawn` 启动OpenClaw subagent
-4. 监控Hermes进程和subagent完成情况
-5. 汇总所有文件，确认版本H由Hermes CLI产出
-6. 按流程逐阶段执行，每阶段完成后汇报给用户
-
-## 注意事项
-
-- 所有对外交付（Word/邮件/飞书）由 OpenClaw 主持
-- **版本H必须用Hermes CLI真实调用**，不能用sessions_spawn替代
-- Hermes CLI无法通过内部消息机制回传结果，必须让Hermes直接把内容写入指定文件
-- 本工作流为通用模板，具体论文请根据 Phase 1 确认的维度调整
-- 两套版本并行写入不同文件，文件名须明确区分H和O
-- **正文引用格式不得使用上标加序号形式，必须使用作者年制**
-- 正文字数不得少于3.5万字
-- **写作时严格遵守写作语法规范，正文段落中不得使用 `**加粗**` 强调术语**
