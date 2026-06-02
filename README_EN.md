@@ -10,7 +10,7 @@ Suitable for the full lifecycle from thesis proposal to final graduation thesis.
 - **Phase 3 Review**: 7-dimension strict review (format / outline / content accuracy / plagiarism check / academic standards / literature completeness / writing grammar)
 - **Phase 3.5 Academic Deep Review**: 3-round deep review (macro structure → chapter-by-chapter → cross-chapter consistency)
 - **Phase 4 Integration**: Review Agent produces integration plan, Orchestrator executes
-- **Phase 5 Word Output**: md2docx_strict.py compliant script, Chinese/English font separation
+- **Phase 5 Word Output**: md2docx_strict.py compliant script + optional AI humanization (Phase 5.1) → Word generation (Phase 5.2)
 
 ## Supported Use Cases
 
@@ -37,7 +37,8 @@ openclaw skills install <slug>
 
 ```
 User → Phase 1 (Confirmation Checklist) → Phase 2 (Dual-Version Drafting) → Phase 2.5 (User Confirmation)
-     → Phase 3 (Review) → Phase 3.5 (Academic Deep Review) → Phase 4 (Integration) → Phase 5 (Finalization & Word Output)
+     → Phase 3 (Review) → Phase 3.5 (Academic Deep Review) → Phase 4 (Integration)
+     → Phase 5 (Finalization) → [Phase 5.1 (Optional AI Removal)] → Phase 5.2 (Word Generation)
 ```
 
 ## File Naming Convention
@@ -47,8 +48,9 @@ User → Phase 1 (Confirmation Checklist) → Phase 2 (Dual-Version Drafting) �
 | v1.0_*_H_*.md | Hermes version (deep reasoning) |
 | v1.0_*_O_*.md | OpenClaw version (format compliance) |
 | v2.0_Review*.md | Review report |
-| v3.0_Integrated.docx | Integrated Word document |
-| v4.0_Final.docx | Final Word document |
+| v3.0_Integrated.md | Source markdown for Word conversion |
+| v3.0_*_Original.docx | Original Word document |
+| v3.0_*_Polished.docx | AI-humanized Word document (optional) |
 
 ## Writing Standards
 
@@ -69,13 +71,21 @@ User → Phase 1 (Confirmation Checklist) → Phase 2 (Dual-Version Drafting) �
 | Reviewer | Phase 3/5 rule-based rapid review |
 | DeepReviewer | Phase 3.5 academic deep review |
 | Integrator | Phase 4 integration plan design |
-| WordAgent | md2docx execution + delivery |
+| WordAgent | md2docx execution |
+| HumanizerAgent | Phase 5.1 AI humanization (optional) |
+
+## Key Changes (v1.6)
+
+- **No Email Sending**: Word documents saved to `~/.openclaw/workspace/`, user retrieves files directly
+- **No Contact Required**: Phase 1 confirmation streamlined (company mapping + outline only)
+- **Optional AI Removal**: Phase 5.1 humanizes AI-written text via humanize-chinese skill before Word output
 
 ## Tech Stack
 
 - OpenClaw subagent (sessions_spawn)
 - Hermes CLI (deep reasoning)
 - academic-thesis-review-skill (academic deep review)
+- humanize-chinese skill (AI humanization, optional)
 - md2docx_strict.py (Word conversion)
 
 ## License
