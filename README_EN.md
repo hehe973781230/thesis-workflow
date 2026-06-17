@@ -43,10 +43,10 @@ openclaw skills install git:hehe973781230/thesis-workflow
 
 ```bash
 openclaw skills search "mba thesis workflow"
-openclaw skills install mba-thesis-workflow
+openclaw skills install thesis-workflow
 ```
 
-ClawHub Page: https://clawhub.ai/hehe973781230/mba-thesis-workflow
+ClawHub Page: https://clawhub.ai/hehe973781230/thesis-workflow
 
 ## Workflow
 
