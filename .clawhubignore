@@ -1,0 +1,6 @@
+.git/
+.github/
+config.env
+SKILL.md.bak
+*.pyc
+__pycache__/
