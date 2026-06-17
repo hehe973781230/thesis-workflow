@@ -12,6 +12,13 @@
 - **Phase 4 整合**：Review Agent 出整合方案，OpenClaw 执行
 - **Phase 5 Word输出**：md2docx_strict.py 合规脚本，中英文分离字体
 
+### v1.7 新增：Loop Agent 架构
+
+- **自动推进**：Orchestrator Loop 自动判断下一步动作（Phase 完成 → 下一 Phase / 打回 / 提示用户）
+- **自检校验**：Guardrails 脚本 10 项自动化规范检查，Phase 退出前必须 100% 通过
+- **智能审核**：审核 Loop 自动重审修订内容，连续 2 轮无新 P0 视为通过
+- **人工把关**：4 个强制 Human-in-the-loop 检查点，确保关键决策不跳过
+
 ## 适用场景
 
 - MBA毕业论文（战略管理/企业分析类）

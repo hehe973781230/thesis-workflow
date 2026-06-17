@@ -12,6 +12,19 @@ Suitable for the full lifecycle from thesis proposal to final graduation thesis.
 - **Phase 4 Integration**: Review Agent produces integration plan, Orchestrator executes
 - **Phase 5 Word Output**: md2docx_strict.py compliant script + optional AI humanization (Phase 5.1) → Word generation (Phase 5.2)
 
+### v1.7 New: Loop Agent Architecture
+
+- **Orchestrator Loop**: Auto-decides next action after each Phase completion
+- **Self-Check Guardrails**: 10 automated checks (chapter completeness, citations, word count, table format)
+- **Review Loop**: Auto-revisits revisions, passes after 2 consecutive rounds with no new P0 issues
+- **Human-in-the-Loop**: 4 mandatory checkpoints for key decisions
+
+### New Files (v1.7)
+
+- `scripts/loop_self_check.py`: Automated Guardrails validation script (10 checks + JSON output)
+- `references/checklist.md`: Academic standards checklist
+- `references/loop-design.md`: Loop design principles documentation
+
 ## Supported Use Cases
 
 - MBA graduation thesis (strategic management / corporate analysis)

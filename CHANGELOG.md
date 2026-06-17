@@ -2,6 +2,30 @@
 
 所有重要更新都会记录在此文件。
 
+## [v1.7] - 2026-06-17
+
+### Loop Agent 架构（新增）
+
+- **Orchestrator Loop**：每 Phase 完成后自动判断下一步，取代手动 trigger 模式
+- **Phase 内部自检 Loop**：Observe → Think → Act → Verify 四步循环
+- **审核 Loop**：Phase 3.5 → 修订 → 自动重审 → 连续 2 轮无新 P0 → 通过
+- **Guardrails 校验**：10 项自动化规范检查（章节完整性/字数/引用/三线表/加粗等）
+- **Verification Loop**：Word 输出后自动校验格式
+- **Human-in-the-loop 检查点**：4 个强制人工确认节点
+
+### 新增文件
+
+- `scripts/loop_self_check.py`：Guardrails 自动化校验脚本（10 项校验 + JSON 输出）
+- `references/checklist.md`：学术规范人工对照清单
+- `references/loop-design.md`：Loop 设计原理说明文档
+
+### 规则型 vs 审核型分工
+
+- 脚本已覆盖的规范（字体/行距/标题层级/三线表），Agent 不再重复检查
+- Agent 专注于脚本无法处理的事项（摘要字数/逻辑链/数据可信度/学术创新性）
+
+---
+
 ## [v1.6] - 2026-06-02
 
 ### 新增功能
