@@ -56,6 +56,13 @@ User → Phase 1 (Confirmation Checklist) → Phase 2 (Dual-Version Drafting) �
      → Phase 5 (Finalization) → [Phase 5.1 (Optional AI Removal)] → Phase 5.2 (Word Generation)
 ```
 
+## v1.7.3 New
+
+- **Orchestrator Auto-Advance**: `scripts/orchestrator.py` decision engine + Review Loop auto-revision
+- **Verification Loop**: 6 real Word format checks (fonts/sizes/line spacing/table borders/bold residue/references)
+- **Guardrails**: 10 automated checks (chapter completeness/word count/citations/headings/bold/tables/keywords)
+- **Unit Tests**: 25 tests covering all scripts
+
 ## File Naming Convention
 
 | Version | Description |

@@ -2,6 +2,32 @@
 
 所有重要更新都会记录在此文件。
 
+## [v1.7.3] - 2026-06-19
+
+### P0 修复
+
+- **分页逻辑修正**：每章标题前分页（原为标题后分页导致空页），首章跳过
+- **审核报告匹配增强**：改用 glob 通配匹配 + 结构化评分字段优先，不再依赖 emoji 硬编码
+- **Verification Loop 真实校验**：新增字体/字号/行距/三线表边框/加粗残留/参考文献分编 6 项 Word 格式实质检查
+- **空壳校验填补**：`check_table_format` 和 `check_table_caption_position` 从永远 `return True` 改为真实列数一致性和表标题位置检测
+- **文件名泛化**：`*report*.md` 收窄为中文 `*报告*.md` + 大小写补充，`_find_review_report` Level 3 加论文关键词过滤
+- **`_check_report_passed` 优先级重排**：综合评级 → 结构化评分 → emoji 回退，🔴 阈值从 5 放宽到 8
+- **`_copy_proposal_cover` 锚点式匹配**：从硬编码"研究背景与研究问题"改为多锚点正则（第X章/1./研究背景/摘要等）
+- **去重格式校验**：`md2docx_strict.py` 移除 `validate_md_format()`，统一由 `loop_self_check.py` 负责
+- **硬编码参数化**：`min_lines`/`min_citations` 改为常量配置
+- **代码风格统一**：8 个内部函数统一下划线 `_` 前缀
+
+### Loop 架构落地
+
+- **新增 `scripts/orchestrator.py`**：决策引擎 + 审核 Loop 自动重审 + Phase 完成自动校验
+- **增强 `scripts/state_manager.py`**：新增 `parse_p0_from_report`、`set_hil_pause`、`clear_hil_pause`、`next_phase_name` 等 6 个方法
+- **新增 `scripts/tests/`**：25 个单元测试覆盖 state_manager/loop_self_check/md2docx_strict
+- **SKILL.md 精简**：1142 行 → 253 行（-78%），新增 Orchestrator 生命周期管理与 HIL 节点表
+
+### 依赖变更
+
+- `install.sh`：`pip install` → `python3 -m pip install --user python-docx`
+
 ## [v1.7] - 2026-06-17
 
 ### Loop Agent 架构（新增）

@@ -47,7 +47,15 @@ ClawHub 页面：https://clawhub.ai/hehe973781230/thesis-workflow
 ```
 用户 → Phase 1（确认清单）→ Phase 2（双版本起草）→ Phase 2.5（用户确认）
      → Phase 3（审核）→ Phase 3.5（学术深度评审）→ Phase 4（整合）→ Phase 5（终审定稿）
+     → [Phase 5.1 去AI味] → Phase 5.2（Word输出）
 ```
+
+## v1.7.3 新增
+
+- **Orchestrator 自动推进**：`scripts/orchestrator.py` 决策引擎 + 审核 Loop 自动重审
+- **Verification Loop 真实校验**：字体/字号/行距/三线表/加粗残留/参考文献分编 6 项 Word 格式检查
+- **Guardrails 10项校验**：章节完整性/字数/引用/标题层级/正文加粗/三线表/表标题位置/合并残留/关键词
+- **单元测试**：25 个测试覆盖全部脚本
 
 ## 版本说明
 

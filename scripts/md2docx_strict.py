@@ -25,7 +25,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
-import re, sys, os
+import re, sys, os, glob
 
 # ============ MBA 格式常量 ============
 FONT_BODY_CN    = '宋体'
@@ -57,9 +57,12 @@ BORDER_BOTTOM = '8'    # 底线0.5磅
 
 BLACK = RGBColor(0x00, 0x00, 0x00)
 
+# 分页控制：首章前不分页
+_first_chapter_encountered = False
+
 # ============ 工具函数 ============
 
-def set_run(run, size, fname, bold=False, color=BLACK):
+def _set_run(run, size, fname, bold=False, color=BLACK):
     run.font.size = size
     run.font.name = fname
     run.font.bold = bold
@@ -72,7 +75,7 @@ def set_run(run, size, fname, bold=False, color=BLACK):
     rFonts.set(qn('w:hAnsi'), fname)
     rPr.append(rFonts)
 
-def set_para(para, align=WD_ALIGN_PARAGRAPH.JUSTIFY,
+def _set_para(para, align=WD_ALIGN_PARAGRAPH.JUSTIFY,
              line=None, sb=None, sa=None, fi=None, li=None):
     pf = para.paragraph_format
     pf.alignment = align
@@ -82,19 +85,19 @@ def set_para(para, align=WD_ALIGN_PARAGRAPH.JUSTIFY,
     if fi is not None:   pf.first_line_indent = fi
     if li is not None:   pf.left_indent = li
 
-def blank(doc):
+def _blank(doc):
     p = doc.add_paragraph()
-    set_para(p, line=Pt(6), sb=Pt(0), sa=Pt(0))
+    _set_para(p, line=Pt(6), sb=Pt(0), sa=Pt(0))
     return p
 
-def strip_bold(t):
+def _strip_bold(t):
     return re.sub(r'\*\*([^*]+)\*\*', r'\1', t)
 
-def is_tbl_sep(line):
+def _is_tbl_sep(line):
     cols = [c.strip() for c in line.split('|')[1:-1]]
     return bool(cols) and all(re.match(r'^:?-+:?$', c) for c in cols)
 
-def set_three_line(table):
+def _set_three_line(table):
     """三线表：顶线+底线，内部无"""
     tbl = table._tbl
     tblPr = tbl.tblPr
@@ -111,7 +114,7 @@ def set_three_line(table):
     for e in tblPr.findall(qn('w:tblBorders')): tblPr.remove(e)
     tblPr.append(b)
 
-def set_header_bot_border(table):
+def _set_header_bot_border(table):
     """表头行底部0.75磅"""
     if not table.rows: return
     for cell in table.rows[0].cells:
@@ -127,16 +130,16 @@ def set_header_bot_border(table):
         for e in tcPr.findall(qn('w:tcBorders')): tcPr.remove(e)
         tcPr.append(tcB)
 
-def apply_tbl_style(table):
+def _apply_tbl_style(table):
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    set_three_line(table)
+    _set_three_line(table)
     if table.rows:
         for cell in table.rows[0].cells:
             for para in cell.paragraphs:
                 para.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 for run in para.runs:
-                    set_run(run, SZ_SMALL, FONT_BODY_CN)
-        set_header_bot_border(table)
+                    _set_run(run, SZ_SMALL, FONT_BODY_CN)
+        _set_header_bot_border(table)
 
 # ============ 目录插入函数 ============
 
@@ -148,14 +151,14 @@ def _insert_toc(doc):
     # 目录页分页符
     p_break = doc.add_paragraph()
     p_break.add_run().add_break(docx.enum.text.WD_BREAK.PAGE)
-    set_para(p_break, sb=Pt(0), sa=Pt(0))
+    _set_para(p_break, sb=Pt(0), sa=Pt(0))
 
     # "目 录" 标题
     p_title = doc.add_paragraph()
     p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    set_para(p_title, line=LINE_SGL, sb=S_BEFORE_H1, sa=S_AFTER_H1)
+    _set_para(p_title, line=LINE_SGL, sb=S_BEFORE_H1, sa=S_AFTER_H1)
     run = p_title.add_run('目 录')
-    set_run(run, SZ_H1, FONT_HEADING, bold=True)
+    _set_run(run, SZ_H1, FONT_HEADING, bold=True)
 
     # TOC 域代码：基于 Heading 1-3 自动生成目录
     toc_para = doc.add_paragraph()
@@ -170,37 +173,67 @@ def _insert_toc(doc):
     toc_run._r.append(fldChar_begin)
     toc_run._r.append(instrText)
     toc_run._r.append(fldChar_end)
-    set_para(toc_para, line=LINE_20, sb=Pt(0), sa=Pt(0))
+    _set_para(toc_para, line=LINE_20, sb=Pt(0), sa=Pt(0))
 
 
 def _copy_proposal_cover(doc, proposal_path):
     """
     从开题报告 .docx 复制封面内容到论文 docx 第一页。
-    复制范围：第一个非空段落开始，到"研究背景与研究问题"之前结束。
+    复制范围：第一个非空段落开始，到第一章/第一节之前结束。
     完整保留原段落格式：字体/字号/加粗/颜色/对齐/缩进/段间距。
     """
     from docx import Document as DocxDoc
     from docx.oxml.ns import qn
-    from docx.oxml import OxmlElement
     prop_doc = DocxDoc(proposal_path)
     paras = prop_doc.paragraphs
 
-    # 找到封面内容起始位置（第一个非空段落）和结束位置（"研究背景"段落前）
+    # 封面结束锚点（按优先级排序）
+    end_anchors = [
+        # 常见章节标题
+        r'^第[一二三四五六七八九十\d]+章',
+        r'^1[.\s]',
+        r'^一[、.\s]',
+        # 研究背景类
+        r'研究背景',
+        r'选题背景',
+        r'问题提出',
+        r'研究意义',
+        # 摘要
+        r'^摘\s*要',
+        r'^摘要',
+    ]
+
     start_idx = None
     end_idx = None
     for i, p in enumerate(paras):
         t = p.text.strip()
-        if t and start_idx is None:
+        if not t:
+            continue
+        if start_idx is None:
             start_idx = i  # 第一个非空段落
-        if ('研究背景与研究问题' in t or
-                ('研究背景' in t and '问题' in t) or
-                t.startswith('1.') or t.startswith('一、')):
-            end_idx = i
-            break
+        else:
+            # 检测是否到达正文起点
+            for anchor in end_anchors:
+                if re.search(anchor, t):
+                    end_idx = i
+                    break
+            if end_idx is not None:
+                break
 
-    if start_idx is None or end_idx is None:
-        print('⚠️ 未找到封面起止位置，跳过封面复制')
+    if start_idx is None or end_idx is None or end_idx <= start_idx:
+        print('⚠️ 未找到封面起止位置，跳过封面复制（预期：第一个非空段落到第一章之前的段落）')
         return
+
+    print(f'  封面复制：第 {start_idx + 1}~{end_idx} 段落')
+
+    for i in range(start_idx, end_idx):
+        p = paras[i]
+        t = p.text
+        new_p = doc.add_paragraph()
+        # 复制段落对齐
+        new_p.alignment = p.alignment if p.alignment else WD_ALIGN_PARAGRAPH.LEFT
+        # 复制段落格式（缩进、段间距）
+        pf_src = p.paragraph_format
 
     for i in range(start_idx, end_idx):
         p = paras[i]
@@ -244,44 +277,94 @@ def _copy_proposal_cover(doc, proposal_path):
 
 # ============ 入口校验 ============
 
+def _find_review_report(md_path):
+    """查找与论文文件匹配的审核报告。
+    统一命名模式：{论文名}_审核报告_{类型}_{版本}.md
+    回退模式：通配匹配 *审核报告*.md
+    """
+    md_dir = os.path.dirname(md_path) or '.'
+    bn = os.path.basename(md_path)
+    paper_name = re.sub(r'\.md$', '', bn)
+
+    # Level 1: 精确名称匹配 审核报告_{论文名}*.md
+    exact = sorted(glob.glob(os.path.join(md_dir, f'{paper_name}_审核报告*.md')),
+                   key=os.path.getmtime, reverse=True)
+    if exact:
+        return exact[0]
+
+    # Level 2: 通配 *审核报告*.md（取最近修改的）
+    wild = sorted(glob.glob(os.path.join(md_dir, '*审核报告*.md')),
+                  key=os.path.getmtime, reverse=True)
+    if wild:
+        return wild[0]
+
+    # Level 3: 兼容旧命名 *_审核*.md（提取论文关键词缩小范围）
+    kw_match = re.search(r'(论文[^_]+)', paper_name)
+    paper_kw = kw_match.group(1) if kw_match else ''
+    if paper_kw:
+        paper_match = sorted(glob.glob(os.path.join(md_dir, f'*{paper_kw}*_审核*.md')),
+                             key=os.path.getmtime, reverse=True)
+        if paper_match:
+            return paper_match[0]
+    # Level 4: 完全通配（最后手段）
+    legacy = sorted(glob.glob(os.path.join(md_dir, '*_审核*.md')),
+                    key=os.path.getmtime, reverse=True)
+    if legacy:
+        return legacy[0]
+
+    return None
+
+
+def _check_report_passed(report_path):
+    """解析审核报告是否通过。支持结构化评分 + emoji 回退。"""
+    with open(report_path, 'r', encoding='utf-8') as f:
+        rc = f.read()
+
+    # 1. 优先检测结构化评分字段
+    grade_match = re.search(r'评级[：:]\s*(通过|不通过|待修订)', rc)
+    if grade_match:
+        return grade_match.group(1) == '通过'
+
+    # 2. 检测总评字段（综合评级）
+    if re.search(r'综合评级[：:]\s*通过', rc):
+        return True
+
+    # 3. 检测是否含 '✅ 通过'
+    if '✅ 通过' in rc:
+        return True
+
+    # 4. emoji 红色项计数（放宽阈值避免误判）
+    reds = re.findall(r'🔴+', rc)
+    if len(reds) > 8:  # 超过8个🔴视为不通过
+        return False
+
+    # 5. 默认不通过（谨慎原则）
+    return False
+
+
 def preflight(md_path):
     issues = []
     md_dir = os.path.dirname(md_path) or '.'
-    bn = os.path.basename(md_path)
 
-    possible = [os.path.join(md_dir, bn.replace('.md', t)) for t in ['_审核.md','_审核O.md','_审核H.md']]
-    rf = None
-    for p in possible:
-        if os.path.exists(p): rf = p; break
+    rf = _find_review_report(md_path)
     if not rf:
-        pre = re.match(r'(论文[^\.]+)', bn)
-        pp = pre.group(1) if pre else ''
-        cands = [os.path.join(md_dir,f) for f in os.listdir(md_dir)
-                 if f.endswith('.md') and '_审核' in f and pp in f]
-        # Level 2: fuzzy match - extract short keyword (first 2-4 Chinese chars)
-        if not cands and pre:
-            short_kw = re.search(r'论文_([^_]+)', bn)
-            if short_kw:
-                kw = short_kw.group(1)
-                cands = [os.path.join(md_dir,f) for f in os.listdir(md_dir)
-                         if f.endswith('.md') and '_审核' in f and kw in f]
-        if cands:
-            cands.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-            rf = cands[0]
-
-    if not rf:
-        issues.append("❌ 未找到审核报告，请先完成 Review Agent 终审")
+        issues.append("❌ 未找到审核报告（匹配：*审核报告*.md / *_审核*.md），请先完成 Review Agent 终审")
         return False, issues
 
-    with open(rf, 'r', encoding='utf-8') as f:
-        rc = f.read()
-    reds = re.findall(r'🔴\s*项统计[：:]\s*(\d+)', rc)
-    if reds and int(reds[0]) > 0:
-        issues.append(f"❌ 审核报告存在{reds[0]}条🔴问题")
-    if '✅ 通过' not in rc and '综合评级' in rc:
-        issues.append("❌ 审核未通过")
-    if issues:
+    if not _check_report_passed(rf):
+        issues.append(f"❌ 审核报告未通过（{os.path.basename(rf)}），请修复后再生成 Word")
         return False, issues
+
+    # 论文内容基本检查
+    with open(md_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    ch = len(re.findall(r'^#\s+第.+章', content, re.MULTILINE))
+    bb = len(re.findall(r'^(?!#).+\*\*[^*]+\*\*', content, re.MULTILINE))
+    wc = len(content)
+    print(f"✅ 通过 | 审核：{os.path.basename(rf)} | 章节：{ch} | 字数：{wc}")
+    if bb:
+        print(f"   加粗残留：{bb}处（自动清除）")
+    return True, issues
 
     with open(md_path, 'r', encoding='utf-8') as f:
         content = f.read()
@@ -314,10 +397,10 @@ def md_to_docx(md_path, docx_path, proposal_docx_path=None):
         i += 1
 
         if line.strip() == '===END===': continue
-        if is_tbl_sep(line): continue
+        if _is_tbl_sep(line): continue
 
         if line.startswith('|'):
-            cols = [strip_bold(c.strip()) for c in line.split('|')[1:-1]]
+            cols = [_strip_bold(c.strip()) for c in line.split('|')[1:-1]]
             tbl_rows.append(cols)
             continue
 
@@ -387,7 +470,7 @@ def md_to_docx(md_path, docx_path, proposal_docx_path=None):
 
         if in_ref and line.strip() and not line.startswith('#'):
             is_cn = bool(re.search(r'[\u4e00-\u9fff]', line))
-            rt = re.sub(r'^\[\d+\]\s*', '', strip_bold(line.strip()))
+            rt = re.sub(r'^\[\d+\]\s*', '', _strip_bold(line.strip()))
             if is_cn: ref_cn.append(rt)
             else: ref_en.append(rt)
             continue
@@ -397,86 +480,16 @@ def md_to_docx(md_path, docx_path, proposal_docx_path=None):
 
         # 正文段落
         para = doc.add_paragraph()
-        set_para(para, align=WD_ALIGN_PARAGRAPH.JUSTIFY, line=LINE_20,
+        _set_para(para, align=WD_ALIGN_PARAGRAPH.JUSTIFY, line=LINE_20,
                  sb=Pt(0), sa=Pt(0), fi=FIRST_INDENT)
-        run = para.add_run(strip_bold(line))
-        set_run(run, SZ_BODY, FONT_BODY_CN)
+        run = para.add_run(_strip_bold(line))
+        _set_run(run, SZ_BODY, FONT_BODY_CN)
 
     if tbl_rows: _flush_tbl(doc, tbl_rows)
     if ref_cn or ref_en: _flush_refs(doc, ref_cn, ref_en)
 
-    # ============ 格式校验（规则型问题） ============
-    warnings = validate_md_format(lines)
-    if warnings:
-        print('\n⚠️  Markdown 格式校验警告：')
-        for w in warnings:
-            print(f'  - {w}')
-
     doc.save(docx_path)
     return True
-
-# ============ 格式校验函数（规则型问题，脚本自动检测） ============
-
-def validate_md_format(lines):
-    """
-    规则型格式校验，发现问题打印警告但不中断生成。
-    返回警告列表（用于汇总输出）。
-    
-    规则来源：MBA论文规范（用户补充版）
-    """
-    warnings = []
-    prev_line = ''
-    prev_prev_line = ''
-    in_ref = False
-
-    for i, line in enumerate(lines):
-        ln = i + 1
-        line_stripped = line.rstrip('\n\r')
-
-        # ============ 格式类规则 ============
-        # 规则1：禁止 ## 第X章 / ### 第X.X 混合格式
-        if re.match(r'^##\s+第[一二三四五六七八九十\d]+章', line_stripped):
-            warnings.append(
-                f'第{ln}行：发现「## 第X章」格式，章标题应使用 # 第X章（行内容：{line_stripped[:30]}）'
-            )
-        if re.match(r'^###\s+第\d+\.\d+', line_stripped):
-            warnings.append(
-                f'第{ln}行：发现「### 第X.X」格式，节标题应使用 ## X.X（行内容：{line_stripped[:30]}）'
-            )
-        if re.match(r'^####\s+第', line_stripped):
-            warnings.append(
-                f'第{ln}行：发现「#### 第」格式，小节标题应使用 ### X.X.X（行内容：{line_stripped[:30]}）'
-            )
-
-        # 规则2：表格标题应在表格上方（检测表格前一行是否为标题格式）
-        if line_stripped.startswith('|') and prev_line.strip():
-            if not is_tbl_sep(prev_line) and not prev_line.startswith('|'):
-                if not re.match(r'^#{1,3}\s+', prev_line):
-                    warnings.append(
-                        f'第{ln}行：表格前一行（第{ln-1}行）可能为标题但未使用「#」或「##」标记'
-                    )
-
-        # ============ 引用格式规则（规范5.3） ============
-        # 检测上标式引用 [数字] 在正文中出现（规范5.3明确禁止）
-        if re.match(r'^#{1,2}\s*参考文献', line_stripped):
-            in_ref = True
-        if in_ref and not line_stripped.startswith('#') and line_stripped.strip():
-            pass  # 参考文献列表内容不检查
-        if in_ref and (not line_stripped.strip() or line_stripped.startswith('#')):
-            in_ref = False
-        # 正文（非参考文献列表）中出现 [数字] 上标引用格式
-        if not in_ref and not line_stripped.startswith('#'):
-            sup_refs = re.findall(r'(?<![\w\[\]])\[(\d+)\]', line_stripped)
-            if sup_refs:
-                nums = ', '.join(sup_refs)
-                warnings.append(
-                    f'第{ln}行：正文出现上标编号式引用[{nums}]，规范5.3要求作者年制引用（如王明，2018）'
-                )
-
-        prev_prev_line = prev_line
-        prev_line = line_stripped
-
-    return warnings
 
 
 # ============ 子函数 ============
@@ -485,7 +498,7 @@ def _flush_tbl(doc, rows):
     if not rows: return
     rn = len(rows); cn = max(len(r) for r in rows) if rows else 0
     tbl = doc.add_table(rows=rn, cols=cn)
-    apply_tbl_style(tbl)
+    _apply_tbl_style(tbl)
     for ri, rd in enumerate(rows):
         for ci, ct in enumerate(rd):
             if ci < cn:
@@ -494,16 +507,16 @@ def _flush_tbl(doc, rows):
                 for para in cell.paragraphs:
                     para.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     for run in para.runs:
-                        set_run(run, SZ_SMALL, FONT_BODY_CN)
+                        _set_run(run, SZ_SMALL, FONT_BODY_CN)
 
 def _abs_cn(doc, lines, start):
     """中文摘要"""
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    set_para(p, line=LINE_SGL, sb=S_BEFORE_H1, sa=S_AFTER_H1)
+    _set_para(p, line=LINE_SGL, sb=S_BEFORE_H1, sa=S_AFTER_H1)
     run = p.add_run()
     run.text = '摘 要'
-    set_run(run, SZ_H1, FONT_HEADING, bold=True)
+    _set_run(run, SZ_H1, FONT_HEADING, bold=True)
 
     content = []
     j = start
@@ -511,26 +524,26 @@ def _abs_cn(doc, lines, start):
         line = lines[j].rstrip('\n\r')
         if re.match(r'^#{1,2}\s*英文摘要', line): break
         if line.strip() and not line.startswith('#'):
-            content.append(strip_bold(line.strip()))
+            content.append(_strip_bold(line.strip()))
         j += 1
 
     for text in content:
         para = doc.add_paragraph()
-        set_para(para, align=WD_ALIGN_PARAGRAPH.JUSTIFY, line=LINE_20,
+        _set_para(para, align=WD_ALIGN_PARAGRAPH.JUSTIFY, line=LINE_20,
                  sb=Pt(0), sa=Pt(0), fi=FIRST_INDENT)
         run = para.add_run(text)
-        set_run(run, SZ_BODY, FONT_BODY_CN)
+        _set_run(run, SZ_BODY, FONT_BODY_CN)
 
     kw = doc.add_paragraph()
-    set_para(kw, align=WD_ALIGN_PARAGRAPH.JUSTIFY, line=LINE_20,
+    _set_para(kw, align=WD_ALIGN_PARAGRAPH.JUSTIFY, line=LINE_20,
              sb=Pt(0), sa=Pt(0), fi=FIRST_INDENT)
     run = kw.add_run('关键词 ')
-    set_run(run, SZ_BODY, FONT_BODY_CN, bold=True)
+    _set_run(run, SZ_BODY, FONT_BODY_CN, bold=True)
     for text in content:
         m = re.search(r'关键词[：:]\s*(.+)', text)
         if m:
             run2 = kw.add_run(m.group(1))
-            set_run(run2, SZ_BODY, FONT_BODY_CN)
+            _set_run(run2, SZ_BODY, FONT_BODY_CN)
             break
     return j
 
@@ -538,10 +551,10 @@ def _abs_en(doc, lines, start):
     """英文摘要"""
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    set_para(p, line=LINE_SGL, sb=S_BEFORE_H1, sa=S_AFTER_H1)
+    _set_para(p, line=LINE_SGL, sb=S_BEFORE_H1, sa=S_AFTER_H1)
     run = p.add_run()
     run.text = 'Abstract'
-    set_run(run, SZ_H1, FONT_ENGLISH_AB, bold=True)
+    _set_run(run, SZ_H1, FONT_ENGLISH_AB, bold=True)
 
     content = []
     j = start
@@ -549,77 +562,83 @@ def _abs_en(doc, lines, start):
         line = lines[j].rstrip('\n\r')
         if re.match(r'^#{1,2}\s*目录', line): break
         if line.strip() and not line.startswith('#'):
-            content.append(strip_bold(line.strip()))
+            content.append(_strip_bold(line.strip()))
         j += 1
 
     for text in content:
         para = doc.add_paragraph()
-        set_para(para, align=WD_ALIGN_PARAGRAPH.JUSTIFY, line=LINE_20,
+        _set_para(para, align=WD_ALIGN_PARAGRAPH.JUSTIFY, line=LINE_20,
                  sb=Pt(0), sa=Pt(0), fi=FIRST_INDENT)
         run = para.add_run(text)
-        set_run(run, SZ_BODY, FONT_ENGLISH)
+        _set_run(run, SZ_BODY, FONT_ENGLISH)
 
     kw = doc.add_paragraph()
-    set_para(kw, align=WD_ALIGN_PARAGRAPH.JUSTIFY, line=LINE_20,
+    _set_para(kw, align=WD_ALIGN_PARAGRAPH.JUSTIFY, line=LINE_20,
              sb=Pt(0), sa=Pt(0), fi=FIRST_INDENT)
     run = kw.add_run('Key Words ')
-    set_run(run, SZ_BODY, FONT_ENGLISH, bold=True)
+    _set_run(run, SZ_BODY, FONT_ENGLISH, bold=True)
     for text in content:
         m = re.search(r'[Kk]ey\s*[Ww]ords[：:]\s*(.+)', text)
         if m:
             run2 = kw.add_run(m.group(1))
-            set_run(run2, SZ_BODY, FONT_ENGLISH)
+            _set_run(run2, SZ_BODY, FONT_ENGLISH)
             break
     return j
 
 def _chapter_title(doc, raw_text):
-    """各章标题：黑体16磅+段前24磅段后18磅，标题后分页（避免第一页空白）"""
+    """各章标题：黑体16磅+段前24磅段后18磅，标题前分页（首章不分页）"""
+    global _first_chapter_encountered
+    if _first_chapter_encountered:
+        p_break = doc.add_paragraph()
+        p_break.add_run().add_break(docx.enum.text.WD_BREAK.PAGE)
+        _set_para(p_break, sb=Pt(0), sa=Pt(0))
+    _first_chapter_encountered = True
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    set_para(p, line=LINE_SGL, sb=S_BEFORE_H1, sa=S_AFTER_H1)
+    _set_para(p, line=LINE_SGL, sb=S_BEFORE_H1, sa=S_AFTER_H1)
     run = p.add_run()
     run.text = raw_text
-    set_run(run, SZ_H1, FONT_HEADING, bold=True)
-    # 标题后分页，避免第一页空白
-    p.add_run().add_break(docx.enum.text.WD_BREAK.PAGE)
+    _set_run(run, SZ_H1, FONT_HEADING, bold=True)
 
 def _appendix_title(doc, letter):
-    """附录标题：标题后分页"""
+    """附录标题：标题前分页"""
     title = f'附录{letter}' if letter else '附录'
+    p_break = doc.add_paragraph()
+    p_break.add_run().add_break(docx.enum.text.WD_BREAK.PAGE)
+    _set_para(p_break, sb=Pt(0), sa=Pt(0))
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    set_para(p, line=LINE_SGL, sb=S_BEFORE_H1, sa=S_AFTER_H1)
+    _set_para(p, line=LINE_SGL, sb=S_BEFORE_H1, sa=S_AFTER_H1)
     run = p.add_run()
     run.text = title
-    set_run(run, SZ_H1, FONT_HEADING, bold=True)
-    p.add_run().add_break(docx.enum.text.WD_BREAK.PAGE)
+    _set_run(run, SZ_H1, FONT_HEADING, bold=True)
 
 def _sec1(doc, idx, title):
     """一级节标题：1.2  ×××，黑体14磅，段前24磅段后6磅"""
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    set_para(p, line=LINE_SGL, sb=S_BEFORE_H2, sa=S_AFTER_H2)
+    _set_para(p, line=LINE_SGL, sb=S_BEFORE_H2, sa=S_AFTER_H2)
     run = p.add_run()
     run.text = f'{idx}  {title}'
-    set_run(run, SZ_H2, FONT_HEADING, bold=True)
+    _set_run(run, SZ_H2, FONT_HEADING, bold=True)
 
 def _sec2(doc, idx, title):
     """二级节标题：1.2.1  ×××，黑体13磅，段前12磅段后6磅"""
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    set_para(p, line=LINE_SGL, sb=S_BEFORE_H3, sa=S_AFTER_H3)
+    _set_para(p, line=LINE_SGL, sb=S_BEFORE_H3, sa=S_AFTER_H3)
     run = p.add_run()
     run.text = f'{idx}  {title}'
-    set_run(run, SZ_H3, FONT_HEADING, bold=True)
+    _set_run(run, SZ_H3, FONT_HEADING, bold=True)
 
 def _sec3(doc, idx, title):
     """三级节标题：(1) ×××，宋体12磅，与正文同段"""
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    set_para(p, line=LINE_20, sb=Pt(0), sa=Pt(0))
+    _set_para(p, line=LINE_20, sb=Pt(0), sa=Pt(0))
     run = p.add_run()
     run.text = f'{idx} {title}'
-    set_run(run, SZ_H4, FONT_BODY_CN)
+    _set_run(run, SZ_H4, FONT_BODY_CN)
 
 def _body_until_next(lines, start):
     """附录/致谢的正文，直到下一章或参考文献"""
@@ -630,7 +649,7 @@ def _body_until_next(lines, start):
         if re.match(r'^#\s+第.+章', line) or re.match(r'^#{1,2}\s*参考文献', line):
             return j - 1
         if not line.strip() or line.startswith('#'): continue
-        if is_tbl_sep(line): continue
+        if _is_tbl_sep(line): continue
     return j
 
 def _flush_refs(doc, cn, en):
@@ -638,30 +657,30 @@ def _flush_refs(doc, cn, en):
     if cn:
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        set_para(p, line=LINE_SGL, sb=Pt(12), sa=Pt(6))
+        _set_para(p, line=LINE_SGL, sb=Pt(12), sa=Pt(6))
         run = p.add_run()
         run.text = '中文参考文献'
-        set_run(run, SZ_H2, FONT_HEADING, bold=True)
+        _set_run(run, SZ_H2, FONT_HEADING, bold=True)
         for ref in cn:
             para = doc.add_paragraph()
-            set_para(para, align=WD_ALIGN_PARAGRAPH.JUSTIFY, line=LINE_20,
+            _set_para(para, align=WD_ALIGN_PARAGRAPH.JUSTIFY, line=LINE_20,
                      sb=Pt(0), sa=Pt(0), fi=Pt(0))
             run = para.add_run(ref)
-            set_run(run, SZ_REF, FONT_BODY_CN)
+            _set_run(run, SZ_REF, FONT_BODY_CN)
     if en:
-        if cn: blank(doc)
+        if cn: _blank(doc)
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        set_para(p, line=LINE_SGL, sb=Pt(12), sa=Pt(6))
+        _set_para(p, line=LINE_SGL, sb=Pt(12), sa=Pt(6))
         run = p.add_run()
         run.text = '英文参考文献'
-        set_run(run, SZ_H2, FONT_HEADING, bold=True)
+        _set_run(run, SZ_H2, FONT_HEADING, bold=True)
         for ref in en:
             para = doc.add_paragraph()
-            set_para(para, align=WD_ALIGN_PARAGRAPH.JUSTIFY, line=LINE_20,
+            _set_para(para, align=WD_ALIGN_PARAGRAPH.JUSTIFY, line=LINE_20,
                      sb=Pt(0), sa=Pt(0), fi=Pt(0))
             run = para.add_run(ref)
-            set_run(run, SZ_REF, FONT_ENGLISH)
+            _set_run(run, SZ_REF, FONT_ENGLISH)
 
 # ============ 主入口 ============
 

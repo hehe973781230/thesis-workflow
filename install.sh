@@ -70,7 +70,7 @@ if python3 -c "import docx" 2>/dev/null; then
     echo "✅ python-docx 已安装"
 else
     echo "⚠️ python-docx 未安装，尝试安装..."
-    pip install python-docx
+    python3 -m pip install --user python-docx
 fi
 
 # OpenClaw
