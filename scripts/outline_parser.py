@@ -449,6 +449,171 @@ def validate_manual_input(text: str) -> Dict[str, Any]:
     }
 
 
+# ============================================================
+# 开题报告内容提取与归因
+# ============================================================
+
+def _build_node_title_map(nodes: List[Dict]) -> Dict[str, List[str]]:
+    """
+    构建节点标题映射：标准化标题 → node_id
+    用于快速查找段落归属
+    """
+    title_map: Dict[str, List[str]] = {}
+    for node in nodes:
+        title = node.get("title", "")
+        node_id = node.get("id", "")
+        # 标准化：去除空格、小写
+        key = title.lower().strip()
+        if key not in title_map:
+            title_map[key] = []
+        title_map[key].append(node_id)
+    return title_map
+
+
+def extract_proposal_content(
+    docx_path: str,
+    outline_tree: Dict
+) -> Dict[str, Any]:
+    """
+    从开题报告 docx 中提取正文内容，并归因到目录节点
+
+    归因策略：
+      1. 精确匹配：段落文本与节点标题完全一致 → 直接归入
+      2. 编号匹配：段落以 "1.1" 或 "1.1.1" 开头 → 归入对应节点
+      3. 游离内容：无法归因的段落 → 存入 orphan_segments
+
+    返回：
+      {
+        ok: bool,
+        node_segments: {node_id: ["段落1", "段落2"]},
+        orphan_segments: ["段落1", "段落2"],
+        total_paragraphs: int,
+        matched_paragraphs: int
+      }
+    """
+    import re
+
+    # 获取所有段落
+    paragraphs = extract_text_from_docx(docx_path)
+    if not paragraphs:
+        return {
+            "ok": False,
+            "error": "无法读取 docx 内容",
+            "node_segments": {},
+            "orphan_segments": [],
+            "total_paragraphs": 0,
+            "matched_paragraphs": 0
+        }
+
+    # 获取所有节点
+    nodes = outline_tree.get("outline_tree", {}).get("nodes", [])
+    node_map = {n["id"]: n for n in nodes}
+
+    # 构建 node_id → paragraphs 映射
+    node_segments: Dict[str, List[str]] = {n["id"]: [] for n in nodes}
+    orphan_segments: List[str] = []
+
+    # 章节标题模式：1.1 / 1.1.1 / 第1章 / 第1节
+    # 注意：L3标题如"2.2.1 PEST模型"可能含点号，需正确区分编号和标题
+    heading_patterns = [
+        (r'^第([一二三四五六七八九十\d]+)章\s*([^\n]*)', 'ch'),  # 第1章 绪论
+        (r'^(\d+(?:\.\d+){1,2})\s+(.{2,50})$', 'num'),  # 1.1 标题 / 2.2.1 标题
+    ]
+
+    current_node_id: Optional[str] = None
+    current_paragraphs: List[str] = []
+    matched_count = 0
+
+    for idx, style, text in paragraphs:
+        text = text.strip()
+        if not text or len(text) < 5:
+            continue
+
+        # 检测是否为标题
+        is_heading = False
+        new_node_id: Optional[str] = None
+
+        for pat_regex, pat_type in heading_patterns:
+            m = re.match(pat_regex, text)
+            if m:
+                # 额外检查：标题应该短（<30字），正文段落以"第X章"开头但很长
+                # 区分："第1章  绪论"（真标题）vs "第二章文献综述进行理论分析..."（正文）
+                if len(text.strip()) > 30 and not text.startswith(('1', '2', '3', '4', '5', '6', '7', '8', '9', '0')):
+                    continue  # 正文段落，跳过
+
+                is_heading = True
+                # 提取编号
+                num_str = m.group(1) if m.lastindex >= 1 else ""
+                title_text = m.group(2).strip() if m.lastindex >= 2 else ""
+
+                # 尝试匹配节点
+                # 先精确匹配，再模糊匹配父节点
+                matched = False
+                for node in nodes:
+                    node_title = node.get("title", "")
+                    node_id = node["id"]
+
+                    # 精确匹配标题
+                    if title_text and title_text == node_title:
+                        new_node_id = node_id
+                        matched = True
+                        break
+
+                    # 编号匹配（转换中文数字）
+                    node_num = str(node.get("num", ""))
+                    cn_map = {"一":"1","二":"2","三":"3","四":"4","五":"5",
+                              "六":"6","七":"7","八":"8","九":"9","十":"10"}
+                    norm_num = cn_map.get(num_str, num_str)
+
+                    if norm_num == node_num:
+                        new_node_id = node_id
+                        matched = True
+                        break
+
+                # 如果没有精确匹配，尝试匹配父节点（如 2.2.1 → 2.2）
+                if not matched and '.' in num_str:
+                    parent_parts = num_str.rsplit('.', 1)
+                    if len(parent_parts) == 2:
+                        parent_num = parent_parts[0]
+                        for node in nodes:
+                            if str(node.get("num", "")) == parent_num:
+                                new_node_id = node["id"]
+                                break
+
+                break
+
+        if is_heading and new_node_id:
+            # 保存上一个节点的内容
+            if current_node_id and current_paragraphs:
+                node_segments[current_node_id].extend(current_paragraphs)
+                matched_count += len(current_paragraphs)
+
+            current_node_id = new_node_id
+            current_paragraphs = []
+        elif current_node_id:
+            # 累积到当前节点
+            current_paragraphs.append(text)
+        else:
+            # 还没有匹配到节点，游离
+            orphan_segments.append(text)
+
+    # 保存最后一个节点
+    if current_node_id and current_paragraphs:
+        node_segments[current_node_id].extend(current_paragraphs)
+        matched_count += len(current_paragraphs)
+
+    # 统计
+    total = len([p for _, _, p in paragraphs if p.strip()])
+
+    return {
+        "ok": True,
+        "node_segments": node_segments,
+        "orphan_segments": orphan_segments,
+        "total_paragraphs": total,
+        "matched_paragraphs": matched_count
+    }
+
+
 if __name__ == "__main__":
     import sys
 

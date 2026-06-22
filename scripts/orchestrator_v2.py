@@ -300,9 +300,15 @@ def write_single_node(paper_name: str, node_id: str,
 
     review_result = review_node(paper_name, node_id, mock_llm)
 
+    # action 规则：
+    # high → 自动完成
+    # medium/low → 需要用户确认
+    quality = review_result.get("quality", "medium")
+    action = "pending_review" if quality in ("medium", "low") else "completed"
+
     return {
         "ok": True,
-        "action": "pending_review" if review_result.get("quality") in ("medium", "low") else "completed",
+        "action": action,
         "node_id": node_id,
         "review_result": review_result,
         "error": ""
@@ -360,6 +366,8 @@ def orchestrate_phase2(paper_name: str,
     # 更新 state
     state["current_node_id"] = next_node
 
+    quality = result["review_result"].get("quality", "medium")
+
     if result["action"] == "completed":
         state["completed_nodes"].append(next_node)
         update_progress(state)
@@ -370,10 +378,11 @@ def orchestrate_phase2(paper_name: str,
             "ok": True,
             "action": "continue",
             "node_id": next_node,
+            "quality": quality,
             "review_result": result["review_result"],
             "next_node_id": next_next,
             "progress": state["progress"],
-            "message": f"节点 {next_node} 完成，进入下一节点 {next_next}"
+            "message": f"节点 {next_node} 完成（质量：{quality}），进入下一节点 {next_next}"
         }
     else:
         # 需要用户确认（medium/low）
@@ -386,9 +395,10 @@ def orchestrate_phase2(paper_name: str,
             "action": "wait_for_user",
             "reason": "pending_review",
             "node_id": next_node,
+            "quality": quality,
             "review_result": result["review_result"],
             "progress": state["progress"],
-            "message": f"节点 {next_node} 需要您确认评审结果"
+            "message": f"节点 {next_node} 需要您确认评审结果（质量：{quality}）"
         }
 
 
@@ -442,7 +452,7 @@ def handle_review_decision(paper_name: str, node_id: str,
 
 
 # ============================================================
-# Phase 3: 整合输出
+# Phase 3: 整合 + 修改 + 输出
 # ============================================================
 
 def orchestrate_phase3(paper_name: str) -> Dict[str, Any]:
@@ -474,14 +484,139 @@ def orchestrate_phase3(paper_name: str) -> Dict[str, Any]:
 
     full_content = "\n\n".join(sections)
 
+    # 标记为待用户确认状态
+    state["phase3_status"] = "awaiting_review"
+    save_orchestrate_state(paper_name, state)
+
     return {
         "ok": True,
         "phase": "phase3",
+        "sub_status": "awaiting_review",
         "content": full_content,
         "word_count": len(full_content),
         "completed_count": len(state["completed_nodes"]),
         "failed_count": len(state.get("failed_nodes", [])),
-        "message": "论文内容已整合，请确认后输出 Word"
+        "message": "论文已整合，请预览并提出修改意见"
+    }
+
+
+def handle_phase3_feedback(paper_name: str,
+                          feedback: List[Dict[str, str]],
+                          llm_func: Callable[[str], str] = None) -> Dict[str, Any]:
+    """
+    Phase 3: 处理用户修改意见
+
+    feedback 格式：
+    [
+        {"node_id": "1.1", "instruction": "补充行业数据支撑"},
+        {"node_id": "2.1", "instruction": "逻辑不够清晰，重新组织"}
+    ]
+
+    返回：修改后的完整论文内容
+    """
+    state = load_orchestrate_state(paper_name)
+    if not state:
+        return {"ok": False, "error": "状态文件不存在"}
+
+    if state["phase"] != "phase3":
+        return {"ok": False, "error": f"当前阶段为 {state['phase']}，不是 phase3"}
+
+    if not feedback:
+        return {"ok": False, "error": "feedback 为空"}
+
+    if not llm_func:
+        return {"ok": False, "error": "修改需要提供 llm_func"}
+
+    modified_count = 0
+    for item in feedback:
+        node_id = item.get("node_id")
+        instruction = item.get("instruction", "")
+
+        if not node_id:
+            continue
+
+        # 获取当前节点内容
+        node = outline_get_node(paper_name, node_id)
+        if not node:
+            continue
+
+        current_content = node.get("content", "")
+
+        # 调用 LLM 修改
+        prompt = f"""节点：{node.get('title', node_id)}
+
+当前内容：
+---
+{current_content}
+---
+
+修改要求：{instruction}
+
+请根据修改要求，生成修改后的完整内容。"""
+
+        try:
+            new_content = llm_func(prompt)
+            # 去掉可能的 key_conclusion 标签
+            import re
+            new_content = re.sub(r'<key_conclusion>.*?</key_conclusion>', '', new_content, flags=re.DOTALL).strip()
+
+            # 写入 state
+            outline_update_status(paper_name, node_id, "completed", content=new_content)
+            modified_count += 1
+        except Exception as e:
+            pass  # 单节点失败不影响其他
+
+    # 重新整合
+    result = orchestrate_phase3(paper_name)
+    result["modified_count"] = modified_count
+    result["message"] = f"已完成 {modified_count} 处修改，请再次预览"
+
+    return result
+
+
+def confirm_phase3_and_export(paper_name: str) -> Dict[str, Any]:
+    """
+    Phase 3: 用户确认整合结果，输出 Word
+    """
+    state = load_orchestrate_state(paper_name)
+    if not state:
+        return {"ok": False, "error": "状态文件不存在"}
+
+    if state["phase"] != "phase3":
+        return {"ok": False, "error": f"当前阶段为 {state['phase']}，不是 phase3"}
+
+    # 整合最终内容
+    outline_state = outline_load(paper_name)
+    nodes = outline_state["outline"]["outline_tree"]["nodes"]
+    completed_ids = set(state["completed_nodes"])
+
+    sections = []
+    for node in nodes:
+        if node["id"] in completed_ids or node["id"] in state.get("failed_nodes", []):
+            node_data = outline_get_node(paper_name, node["id"])
+            content = node_data.get("content", "") if node_data else ""
+            if content:
+                title = node.get("title", node["id"])
+                sections.append(f"## {title}\n\n{content}")
+
+    full_content = "\n\n".join(sections)
+
+    # 保存最终内容
+    output_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..",
+        f"papers/{paper_name}_final.md"
+    )
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(full_content)
+
+    return {
+        "ok": True,
+        "phase": "phase3",
+        "sub_status": "exported",
+        "output_path": output_path,
+        "word_count": len(full_content),
+        "message": f"论文已导出至 {output_path}，请使用 md2docx_strict.py 转换为 Word"
     }
 
 
@@ -491,6 +626,7 @@ def orchestrate_phase3(paper_name: str) -> Dict[str, Any]:
 
 def orchestrate(paper_name: str,
                phase: str = None,
+               action: str = None,
                llm_func: Callable[[str], str] = None,
                **kwargs) -> Dict[str, Any]:
     """
@@ -498,13 +634,18 @@ def orchestrate(paper_name: str,
 
     phase:
       None / "auto": 根据当前状态自动判断
-      "phase1": 目录解析
-      "phase2": 逐节点写作
-      "phase3": 整合输出
+      "phase1": 目录确认
+      "phase2": 智能写作
+      "phase3": 整合 + 修改 + 输出
 
-    llm_func: LLM 调用函数，必须提供
+    action（可选）:
+      "phase3_review": 生成论文供用户预览
+      "phase3_feedback": 处理用户修改意见
+      "phase3_export": 确认并导出 Word
 
-    kwargs: 额外参数（如 docx_path, outline_text, decision 等）
+    llm_func: LLM 调用函数，Phase 2 和 phase3_feedback 需要提供
+
+    kwargs: 额外参数（如 feedback, decision 等）
     """
     state = load_orchestrate_state(paper_name)
 
@@ -527,7 +668,13 @@ def orchestrate(paper_name: str,
         return orchestrate_phase2(paper_name, llm_func)
 
     elif phase == "phase3":
-        return orchestrate_phase3(paper_name)
+        if action == "phase3_feedback":
+            return handle_phase3_feedback(paper_name, llm_func=llm_func, **kwargs)
+        elif action == "phase3_export":
+            return confirm_phase3_and_export(paper_name)
+        else:
+            # 默认：生成论文供预览
+            return orchestrate_phase3(paper_name)
 
     else:
         return {"ok": False, "error": f"未知阶段: {phase}"}
