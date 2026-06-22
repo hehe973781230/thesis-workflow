@@ -803,6 +803,63 @@ def extract_proposal_content(
     }
 
 
+def extract_content_hints(
+    docx_path: str,
+    outline_tree: Dict,
+    llm_func: Callable[[str], str] = None,
+    max_hint_chars: int = 150
+) -> Dict[str, str]:
+    """
+    从开题报告 docx 中提取每个节点的方向提示（content_hint）
+
+    使用 extract_proposal_content() 的结果：
+    - 每个节点的 node_segments 就是该节点在开题报告中的内容
+    - 取前 1-2 个段落，每段取前 60 字作为提示
+
+    参数：
+      docx_path: 开题报告 docx 文件路径
+      outline_tree: outline_parse() 返回的 outline 对象
+      llm_func: LLM 调用函数（传入 extract_proposal_content）
+      max_hint_chars: 每个 hint 的最大字符数，默认 150
+
+    返回：
+      {node_id: "方向提示文本", ...}
+    """
+    # 调用 extract_proposal_content 获取每个节点的内容
+    result = extract_proposal_content(docx_path, outline_tree, llm_func=llm_func)
+    if not result.get("ok"):
+        return {}
+
+    content_hints: Dict[str, str] = {}
+
+    for node_id, segments in result["node_segments"].items():
+        if not segments:
+            continue
+
+        # 取前 2 个段落作为 hint
+        hint_parts = []
+        for seg in segments[:2]:
+            # 取前 60 字，去除多余空白
+            hint = seg.strip()[:60]
+            if hint:
+                hint_parts.append(hint)
+
+        if hint_parts:
+            full_hint = "。".join(hint_parts)
+            # 截断到 max_hint_chars
+            if len(full_hint) > max_hint_chars:
+                full_hint = full_hint[:max_hint_chars] + "..."
+            content_hints[node_id] = full_hint
+
+    # 孤儿段落不归入任何节点，但整体孤儿数量可作为参考
+    if result.get("orphan_segments"):
+        orphan_count = len(result["orphan_segments"])
+        # 存入 special key
+        content_hints["__orphan_count__"] = str(orphan_count)
+
+    return content_hints
+
+
 if __name__ == "__main__":
     import sys
 
