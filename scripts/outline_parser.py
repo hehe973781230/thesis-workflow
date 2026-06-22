@@ -453,6 +453,71 @@ def validate_manual_input(text: str) -> Dict[str, Any]:
 # 开题报告内容提取与归因
 # ============================================================
 
+def _llm_match_proposal_headings(
+    headings: List[str],
+    nodes: List[Dict],
+    llm_func: Callable[[str], str]
+) -> List[Dict[str, Any]]:
+    """
+    用 AI 匹配开题报告标题到目录节点（第一层 AI 归因）
+
+    输入：开题报告标题列表 + 目录节点列表
+    输出：每个标题的匹配结果
+
+    返回格式：
+    [
+        {
+            "heading": "1.4 研究思路与方法",
+            "node_id": "1.3",   # 匹配的节点ID
+            "confidence": 0.85,  # 置信度
+            "reason": "1.4是1.3的补充，具体内容属于研究思路范畴"
+        },
+        ...
+    ]
+    """
+    if not headings or not llm_func:
+        return []
+
+    # 构建节点上下文
+    node_context = []
+    for n in nodes:
+        indent = "  " * (n.get("level", 1) - 1)
+        node_context.append(f"{indent}- [{n['id']}] {n.get('title', '')} (级别 {n.get('level', '')})")
+
+    headings_text = "\n".join([f"[{i}] {h}" for i, h in enumerate(headings)])
+
+    prompt = f"""你是一个学术论文结构分析助手。
+你的任务：将开题报告中的每个章节标题，匹配到论文目录的对应节点。
+
+## 论文目录节点
+{chr(10).join(node_context)}
+
+## 开题报告标题（需匹配到目录节点）
+{headings_text}
+
+## 匹配规则
+1. 根据标题语义，找到最匹配的目录节点
+2. 标题与目录节点标题可能存在措辞差异（如"1.4 研究思路"→"1.3 研究目的与意义"），根据语义判断
+3. 如果某标题在目录中找不到合适的匹配节点，返回 node_id=null（该标题不归入任何节点）
+4. 置信度 0-1：高度确定 0.85+，较有把握 0.7-0.85，不确定 0.5-0.7，匹配不上 <0.5
+
+## 输出格式（JSON数组）
+[{{"idx": 0, "node_id": "1.3", "confidence": 0.8, "reason": "..."}}, ...]
+
+只输出 JSON 数组，不要有其他内容。"""
+
+    try:
+        response = llm_func(prompt)
+        import json, re
+        json_match = re.search(r'\[.*\]', response, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group(0))
+    except Exception:
+        pass
+
+    return [{"idx": i, "node_id": None, "confidence": 0.0, "reason": "LLM调用失败"} for i in range(len(headings))]
+
+
 def _llm_semantic_classify(
     segments: List[str],
     nodes: List[Dict],
@@ -507,15 +572,12 @@ def _llm_semantic_classify(
     try:
         response = llm_func(prompt)
         import json, re
-        # 尝试提取 JSON
         json_match = re.search(r'\[.*\]', response, re.DOTALL)
         if json_match:
-            result = json.loads(json_match.group(0))
-            return result
+            return json.loads(json_match.group(0))
     except Exception:
         pass
 
-    # 失败时返回空（全部游离）
     return [{"idx": i, "node_id": None, "confidence": 0.0, "reason": "LLM调用失败"} for i in range(len(segments))]
 
 
@@ -529,25 +591,26 @@ def extract_proposal_content(
     从开题报告 docx 中提取正文内容，并归因到目录节点
 
     归因策略（三层）：
-      1. 固定规则层：编号匹配、标题匹配（详见代码）
-      2. AI 语义层：LLM 判断剩余段落归属（llm_func 提供）
-      3. 用户决策层：AI 置信度 < threshold → undecided_segments
+      1. 固定规则层：精确匹配开题报告标题 → 目录节点
+      2. AI 标题匹配层：LLM 匹配剩余标题 → 节点（llm_func 提供）
+      3. AI 语义层：无法匹配标题的正文段落 → 节点
 
     参数：
       docx_path: 开题报告 docx 文件路径
       outline_tree: outline_parse() 返回的 outline 对象
-      llm_func: LLM 调用函数，语义识别用（如不提供则跳过 AI 层）
+      llm_func: LLM 调用函数（标题匹配 + 语义归因）
       confidence_threshold: AI 置信度阈值，默认 0.7
 
     返回：
       {
         ok: bool,
         node_segments: {node_id: ["段落1", "段落2"]},
-        orphan_segments: ["段落1", "段落2"],        # AI 判断为游离
-        undecided_segments: [("段落", {"candidates": [("node_id", score), ...]})],  # AI 也无法判断
+        orphan_segments: ["段落1", "段落2"],
+        undecided_segments: [("段落", {"candidates": [("node_id", score), ...]})],
         total_paragraphs: int,
         matched_paragraphs: int,  # 固定规则层
-        ai_classified: int        # AI 层归因数
+        ai_heading_matched: int,  # AI 标题匹配层
+        ai_classified: int        # AI 语义层
       }
     """
     import re
@@ -563,6 +626,7 @@ def extract_proposal_content(
             "undecided_segments": [],
             "total_paragraphs": 0,
             "matched_paragraphs": 0,
+            "ai_heading_matched": 0,
             "ai_classified": 0
         }
 
@@ -575,17 +639,92 @@ def extract_proposal_content(
     orphan_segments: List[str] = []
     undecided_segments: List[Tuple[str, Dict]] = []
 
-    # 章节标题模式：1.1 / 1.1.1 / 第1章 / 第1节
+    # 章节标题模式
     heading_patterns = [
-        (r'^第([一二三四五六七八九十\d]+)章\s*([^\n]{0,50})$', 'ch'),  # 第1章 绪论
-        (r'^(\d+(?:\.\d+){1,2})\s+([^\n]{2,50})$', 'num'),  # 1.1 标题 / 2.2.1 标题
+        (r'^第([一二三四五六七八九十\d]+)章\s*([^\n]{0,50})$', 'ch'),
+        (r'^(\d+(?:\.\d+){1,2})\s+([^\n]{2,50})$', 'num'),
     ]
 
-    # ---- 第一层：固定规则归因 ----
+    # ---- 提取所有标题段落 ----
+    proposal_headings: List[str] = []
+    heading_info: List[Dict] = []  # {idx, text, num_str, title_text, pat_type}
+
+    for idx, style, text in paragraphs:
+        text = text.strip()
+        if not text or len(text) < 5:
+            continue
+
+        for pat_regex, pat_type in heading_patterns:
+            m = re.match(pat_regex, text)
+            if m:
+                if len(text) > 35:  # 真标题判断
+                    continue
+                num_str = m.group(1) if m.lastindex >= 1 else ""
+                title_text = m.group(2).strip() if m.lastindex >= 2 else ""
+                proposal_headings.append(text)
+                heading_info.append({
+                    "idx": idx,
+                    "text": text,
+                    "num_str": num_str,
+                    "title_text": title_text,
+                    "pat_type": pat_type
+                })
+                break
+
+    # ---- 建立标题 → node_id 映射 ----
+    # 第一步：固定规则精确匹配
+    heading_to_node: Dict[str, str] = {}  # heading_text → node_id
+
+    for info in heading_info:
+        title_text = info["title_text"]
+        pat_type = info["pat_type"]
+        num_str = info["num_str"]
+        heading_text = info["text"]
+
+        for node in nodes:
+            node_title = node.get("title", "")
+            # 精确匹配标题
+            if title_text and title_text == node_title:
+                heading_to_node[heading_text] = node["id"]
+                break
+
+        # L1 中文数字章节（"第一章" → ch1）
+        if heading_text not in heading_to_node and pat_type == 'ch':
+            cn_map = {"一":"1","二":"2","三":"3","四":"4","五":"5",
+                      "六":"6","七":"7","八":"8","九":"9","十":"10"}
+            norm_num = cn_map.get(num_str, num_str)
+            for node in nodes:
+                if str(node.get("num", "")) == norm_num and node.get("level") == 1:
+                    heading_to_node[heading_text] = node["id"]
+                    break
+
+    # 第二步：AI 标题匹配（未匹配的标题）
+    unmatched_headings = [info for info in heading_info if info["text"] not in heading_to_node]
+    ai_heading_matched_count = 0
+
+    if unmatched_headings and llm_func:
+        heading_texts = [info["text"] for info in unmatched_headings]
+        ai_results = _llm_match_proposal_headings(heading_texts, nodes, llm_func)
+
+        for i, info in enumerate(unmatched_headings):
+            if i < len(ai_results):
+                result = ai_results[i]
+                confidence = result.get("confidence", 0.0)
+                node_id = result.get("node_id")
+
+                if confidence >= confidence_threshold and node_id and node_id in node_map:
+                    heading_to_node[info["text"]] = node_id
+                    ai_heading_matched_count += 1
+                elif confidence >= 0.5 and node_id and node_id in node_map:
+                    # 中等置信度：记录但不自动归入（正文跟随时特殊处理）
+                    heading_to_node[info["text"]] = node_id  # 暂存，后续正文用
+                # 低置信度：不归入，正文全部游离
+
+    # ---- 处理正文段落 ----
     current_node_id: Optional[str] = None
     current_paragraphs: List[str] = []
     matched_count = 0
-    unclassified: List[Tuple[int, str]] = []  # (idx, text) 未归因段落
+    unclassified: List[Tuple[int, str]] = []
 
     for idx, style, text in paragraphs:
         text = text.strip()
@@ -599,41 +738,14 @@ def extract_proposal_content(
         for pat_regex, pat_type in heading_patterns:
             m = re.match(pat_regex, text)
             if m:
-                # 真标题判断：短文本（<30字），且有空格分隔
                 if len(text) > 35:
                     continue
-
                 is_heading = True
-                num_str = m.group(1) if m.lastindex >= 1 else ""
-                title_text = m.group(2).strip() if m.lastindex >= 2 else ""
-
-                matched_node = False
-                for node in nodes:
-                    node_title = node.get("title", "")
-                    node_id = node["id"]
-
-                    # 精确匹配标题
-                    if title_text and title_text == node_title:
-                        new_node_id = node_id
-                        matched_node = True
-                        break
-
-                # 标题匹配失败？再试中文数字→阿拉伯数字转换后的标题匹配
-                # 例："第一章" → "1"（章节编号的中文写法）
-                if not matched_node and pat_type == 'ch':
-                    cn_map = {"一":"1","二":"2","三":"3","四":"4","五":"5",
-                              "六":"6","七":"7","八":"8","九":"9","十":"10"}
-                    norm_num = cn_map.get(num_str, num_str)
-                    # 中文数字章节（如"第一章"）找 num=norm_num 的 L1 节点
-                    for node in nodes:
-                        if str(node.get("num", "")) == norm_num and node.get("level") == 1:
-                            new_node_id = node["id"]
-                            matched_node = True
-                            break
-
+                new_node_id = heading_to_node.get(text)  # 从映射表查找
                 break
 
         if is_heading and new_node_id:
+            # 保存上一个节点的内容
             if current_node_id and current_paragraphs:
                 node_segments[current_node_id].extend(current_paragraphs)
                 matched_count += len(current_paragraphs)
@@ -650,7 +762,7 @@ def extract_proposal_content(
         node_segments[current_node_id].extend(current_paragraphs)
         matched_count += len(current_paragraphs)
 
-    # ---- 第二层：AI 语义归因 ----
+    # ---- AI 语义归因（未匹配标题的正文段落）----
     ai_classified_count = 0
     if unclassified and llm_func:
         unclassified_texts = [t for _, t in unclassified]
@@ -666,16 +778,13 @@ def extract_proposal_content(
                     node_segments[node_id].append(text)
                     ai_classified_count += 1
                 elif confidence >= 0.5 and node_id and node_id in node_map:
-                    # 置信度中等，进入待用户确认
                     undecided_segments.append((text, {
                         "candidates": [(node_id, confidence)],
                         "reason": result.get("reason", "")
                     }))
                 else:
-                    # 置信度低，游离
                     orphan_segments.append(text)
     else:
-        # 无 AI，全部游离
         for _, text in unclassified:
             orphan_segments.append(text)
 
@@ -689,6 +798,7 @@ def extract_proposal_content(
         "undecided_segments": undecided_segments,
         "total_paragraphs": total,
         "matched_paragraphs": matched_count,
+        "ai_heading_matched": ai_heading_matched_count,
         "ai_classified": ai_classified_count
     }
 
