@@ -71,9 +71,10 @@ def outline_load(paper_name: str) -> Optional[Dict[str, Any]]:
 VALID_STATUSES = {"pending", "writing", "reviewing", "approved", "failed", "completed"}
 
 
-def outline_update_status(paper_name: str, node_id: str, status: str, 
+def outline_update_status(paper_name: str, node_id: str, status: str,
                           retry_count: int = None, key_conclusion: str = None,
-                          word_count: int = None) -> Dict[str, Any]:
+                          word_count: int = None,
+                          content: str = None) -> Dict[str, Any]:
     """
     更新节点状态
     """
@@ -94,6 +95,8 @@ def outline_update_status(paper_name: str, node_id: str, status: str,
                 node["key_conclusion"] = key_conclusion
             if word_count is not None:
                 node["word_count"] = word_count
+            if content is not None:
+                node["content"] = content
             node_found = True
             break
     
