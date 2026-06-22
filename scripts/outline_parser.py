@@ -611,7 +611,6 @@ def extract_proposal_content(
                 for node in nodes:
                     node_title = node.get("title", "")
                     node_id = node["id"]
-                    node_num = str(node.get("num", ""))
 
                     # 精确匹配标题
                     if title_text and title_text == node_title:
@@ -619,21 +618,17 @@ def extract_proposal_content(
                         matched_node = True
                         break
 
-                    # 编号匹配（转换中文数字）
+                # 标题匹配失败？再试中文数字→阿拉伯数字转换后的标题匹配
+                # 例："第一章" → "1"（章节编号的中文写法）
+                if not matched_node and pat_type == 'ch':
                     cn_map = {"一":"1","二":"2","三":"3","四":"4","五":"5",
                               "六":"6","七":"7","八":"8","九":"9","十":"10"}
                     norm_num = cn_map.get(num_str, num_str)
-                    if norm_num == node_num:
-                        new_node_id = node_id
-                        matched_node = True
-                        break
-
-                # 父节点匹配（如 2.2.1 → 2.2）
-                if not matched_node and '.' in num_str:
-                    parent_num = num_str.rsplit('.', 1)[0]
+                    # 中文数字章节（如"第一章"）找 num=norm_num 的 L1 节点
                     for node in nodes:
-                        if str(node.get("num", "")) == parent_num:
+                        if str(node.get("num", "")) == norm_num and node.get("level") == 1:
                             new_node_id = node["id"]
+                            matched_node = True
                             break
 
                 break
