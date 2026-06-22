@@ -138,6 +138,8 @@ def outline_get_context(paper_name: str, node_id: str) -> Optional[Dict[str, Any
     """
     获取节点的上下文信息（前序节点摘要、后续节点方向等）
     用于 ContextBuilder 生成 prompt 包
+    
+    兄弟关系在同一父节点内查找，不依赖 prev_sibling_id/next_sibling_id 字段
     """
     state = outline_load(paper_name)
     if not state:
@@ -150,10 +152,33 @@ def outline_get_context(paper_name: str, node_id: str) -> Optional[Dict[str, Any
     if not node:
         return None
     
-    # 获取前序节点
-    prev_node = node_map.get(node.get("prev_sibling_id"))
-    parent_node = node_map.get(node.get("parent_id"))
-    next_node = node_map.get(node.get("next_sibling_id"))
+    parent_id = node.get("parent_id")
+    level = node.get("level")
+    
+    # 获取同父节点的兄弟节点列表
+    if parent_id:
+        parent_node = node_map.get(parent_id)
+        sibling_ids = parent_node.get("children_ids", []) if parent_node else []
+    else:
+        # 一级节点：找同级的其他一级节点
+        parent_node = None
+        sibling_ids = [n["id"] for n in nodes if n.get("level") == 1 and n["id"] != node_id]
+    
+    # 同级前序节点（紧前一个）
+    prev_node = None
+    if node_id in sibling_ids:
+        idx = sibling_ids.index(node_id)
+        if idx > 0:
+            prev_id = sibling_ids[idx - 1]
+            prev_node = node_map.get(prev_id)
+    
+    # 同级后续节点（紧后一个）
+    next_node = None
+    if node_id in sibling_ids:
+        idx = sibling_ids.index(node_id)
+        if idx < len(sibling_ids) - 1:
+            next_id = sibling_ids[idx + 1]
+            next_node = node_map.get(next_id)
     
     context = {
         "current_node": node,
