@@ -410,6 +410,8 @@ def orchestrate_phase1_3(
     save_result = save_content_hints_to_outline(paper_name, content_hints)
 
     # 5. 组装细粒度 node_details（拍板 #5）
+    # 修复 P1-2：重命名 matched_count → matched_paragraphs_total，matched_paragraphs → matched_paragraphs_preview
+    # 避免 matched_count=49 与 matched_paragraphs=list[3] 的数量不一致误解
     nodes = outline_tree["outline_tree"]["nodes"]
     node_id_set = {n["id"] for n in nodes}
     node_details = {}
@@ -420,8 +422,11 @@ def orchestrate_phase1_3(
             "title": node.get("title", "") if node else "",
             "level": node.get("level", 0) if node else 0,
             "content_hint": content_hints.get(node_id, ""),
-            "matched_paragraphs": node_segments[:3],  # 前3段预览
+            "matched_paragraphs_total": len(node_segments),  # 总段数
+            "matched_paragraphs_preview": node_segments[:3],  # 前3段预览
+            # 保留旧字段名（向后兼容 v2.0.1 调用方）
             "matched_count": len(node_segments),
+            "matched_paragraphs": node_segments[:3],
             "has_hint": bool(content_hints.get(node_id))
         }
 
@@ -733,12 +738,24 @@ def write_single_node(paper_name: str, node_id: str,
 
 
 def orchestrate_phase2(paper_name: str,
-                      llm_func: Callable[[str], str]) -> Dict[str, Any]:
+                      llm_func: Optional[Callable[[str], str]] = None) -> Dict[str, Any]:
     """
     Phase 2: 逐节点写作 + 评审
 
     支持断点续跑：从 current_node_id 继续
+
+    参数：
+      paper_name: 论文名
+      llm_func: LLM 调用函数（必传）。修复 P1-1：调用时校验，缺则返回友好错误而非 TypeError
     """
+    # 修复 P1-1：llm_func 缺则返回友好错误
+    if llm_func is None:
+        return {
+            "ok": False,
+            "error": "llm_func 必传：Phase 2 需要调用 LLM 进行写作，请提供 llm_func(prompt) -> str",
+            "action": "input_required"
+        }
+
     state = load_orchestrate_state(paper_name)
     if not state:
         return {"ok": False, "error": "状态文件不存在，请先初始化 Phase 1"}
@@ -1197,6 +1214,19 @@ def check_info_scarcity(paper_name: str, node_id: str) -> Dict[str, Any]:
     if not state:
         return {"ok": False, "action": "proceed", "error": "目录树未初始化"}
 
+    # 特例 0：虚拟摘要节点（is_virtual=True）不写作，跳过 info_scarcity
+    if node.get("is_virtual"):
+        return {
+            "ok": True,
+            "action": "proceed",
+            "node_id": node_id,
+            "node_title": node.get("title", ""),
+            "current_info": {"is_virtual": True},
+            "missing_sources": [],
+            "prompt_options": {},
+            "note": "虚拟摘要节点，由系统自动合成，不需要人工写作"
+        }
+
     # 1. content_hint
     content_hint = (node.get("content_hint") or "").strip()
 
@@ -1219,21 +1249,37 @@ def check_info_scarcity(paper_name: str, node_id: str) -> Dict[str, Any]:
         "chapter_summary" if has_chapter_summary else None
     )
 
+    # 特例 1：首章 L1（无父、无前置 bridge 是不可能的）
+    #   - L1 首章节点（level==1, parent_id==None）：bridge 允许空
+    #   - 其他节点（含章节首 L2）：bridge 仍需检查 P3 fallback
+    is_first_chapter_l1 = (
+        node.get("level") == 1 and node.get("parent_id") is None
+    )
+    if is_first_chapter_l1:
+        # 首章 L1：仅检查 content_hint 和 user_hints（bridge 允许空）
+        missing = []
+        if not content_hint:
+            missing.append("content_hint")
+        if not user_hints:
+            missing.append("user_hints")
+        # bridge 缺失是首章 L1 的正常状态，不计入 missing
+    else:
+        # 标准 A：任一为空 → needs_user_input
+        missing = []
+        if not content_hint:
+            missing.append("content_hint")
+        if not user_hints:
+            missing.append("user_hints")
+        if not has_bridge:
+            missing.append("bridge")
+
     current_info = {
         "content_hint": content_hint,
         "user_hints": user_hints,
         "has_bridge": has_bridge,
-        "bridge_source": bridge_source
+        "bridge_source": bridge_source,
+        "is_first_chapter_l1": is_first_chapter_l1
     }
-
-    # 标准 A：任一为空 → needs_user_input
-    missing = []
-    if not content_hint:
-        missing.append("content_hint")
-    if not user_hints:
-        missing.append("user_hints")
-    if not has_bridge:
-        missing.append("bridge")
 
     if missing:
         return {

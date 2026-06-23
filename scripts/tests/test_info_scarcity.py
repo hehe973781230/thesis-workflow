@@ -43,18 +43,27 @@ def cleanup():
 
 
 def setup_outline():
-    """构造 2 章 × 2 L2 测试 outline"""
+    """构造 2 章 × 2 L2 测试 outline
+
+    修复 P0-2 测试兼容：补充 prev_sibling_id 字段
+    （修复后 is_first_node 判定依赖此字段）
+    """
     nodes = [
         {"id": "ch1", "level": 1, "title": "绪论", "parent_id": None,
-         "children_ids": ["1.1", "1.2"], "writing_status": "pending"},
+         "children_ids": ["1.1", "1.2"], "prev_sibling_id": None, "next_sibling_id": "ch2",
+         "writing_status": "pending"},
         {"id": "1.1", "level": 2, "title": "研究背景", "parent_id": "ch1",
-         "children_ids": [], "writing_status": "pending"},
+         "children_ids": [], "prev_sibling_id": None, "next_sibling_id": "1.2",
+         "writing_status": "pending"},
         {"id": "1.2", "level": 2, "title": "研究内容", "parent_id": "ch1",
-         "children_ids": [], "writing_status": "pending"},
+         "children_ids": [], "prev_sibling_id": "1.1", "next_sibling_id": None,
+         "writing_status": "pending"},
         {"id": "ch2", "level": 1, "title": "理论基础", "parent_id": None,
-         "children_ids": ["2.1"], "writing_status": "pending"},
+         "children_ids": ["2.1"], "prev_sibling_id": "ch1", "next_sibling_id": None,
+         "writing_status": "pending"},
         {"id": "2.1", "level": 2, "title": "竞争战略理论", "parent_id": "ch2",
-         "children_ids": [], "writing_status": "pending"},
+         "children_ids": [], "prev_sibling_id": None, "next_sibling_id": None,
+         "writing_status": "pending"},
     ]
     outline = {"outline_tree": {"metadata": {"paper_title": "test"}, "nodes": nodes}}
     outline_with_summary = insert_chapter_summary_nodes(outline)
@@ -97,11 +106,16 @@ def test_save_content_hints_basic():
 # ============================================================
 
 def test_scarcity_all_empty():
-    """测试 2：3 项全空 → needs_user_input（3 项全 missing）"""
-    print("\n=== 测试 2：3 项全空 → needs_user_input ===")
+    """测试 2：全空 → needs_user_input
+
+    修复 P0-2 后：1.1 是 ch1 首 L2 节点（is_first_node=True），
+    bridge 缺失是首节点的正常状态，不计入 missing。
+    改用 2.1（非首节点）测试 3 项全空场景。
+    """
+    print("\n=== 测试 2：全空 → needs_user_input（非首节点 3 项全 missing） ===")
     setup_outline()
 
-    r = check_info_scarcity(TEST_PAPER, "1.1")
+    r = check_info_scarcity(TEST_PAPER, "2.1")
 
     assert r["ok"] is True
     assert r["action"] == "needs_user_input"
@@ -114,21 +128,65 @@ def test_scarcity_all_empty():
 
 
 def test_scarcity_one_missing():
-    """测试 3：部分缺失（标准 A：任一为空就暂停）"""
+    """测试 3：部分缺失（标准 A：任一为空就暂停）
+
+    修复 P0-2 后：2.1 不是首节点，所以 bridge 缺失仍计入 missing。
+    """
     print("\n=== 测试 3：部分缺失 → needs_user_input（标准 A） ===")
     setup_outline()
 
     # 只给 content_hint，user_hints 和 bridge 仍空
-    outline_update_status(TEST_PAPER, "1.1", "pending",
+    outline_update_status(TEST_PAPER, "2.1", "pending",
                           content_hint="用户填的提示")
 
-    r = check_info_scarcity(TEST_PAPER, "1.1")
+    r = check_info_scarcity(TEST_PAPER, "2.1")
 
     assert r["action"] == "needs_user_input"
     assert "user_hints" in r["missing_sources"]
     assert "bridge" in r["missing_sources"]
     assert "content_hint" not in r["missing_sources"]
     print(f"   ✅ missing={r['missing_sources']}")
+
+
+def test_scarcity_first_node_bridge_optional():
+    """测试 3.5（修复 P0-2 新增）：首章 L1 bridge 允许为空
+
+    验证：ch1 是首章 L1 节点（is_first_chapter_l1=True），
+    bridge 缺失不算 missing，只检查 content_hint + user_hints。
+    """
+    print("\n=== 测试 3.5：首章 L1 bridge 允许为空（修复 P0-2） ===")
+    setup_outline()
+
+    # 给 ch1 填 content_hint（ch1 是首章 L1，所以只缺 user_hints）
+    outline_update_status(TEST_PAPER, "ch1", "pending",
+                          content_hint="绪论关注 AI 时代背景")
+
+    r = check_info_scarcity(TEST_PAPER, "ch1")
+
+    assert r["action"] == "needs_user_input"
+    assert r["current_info"]["is_first_chapter_l1"] is True
+    assert "bridge" not in r["missing_sources"], \
+        f"首章 L1 bridge 缺失是正常的，不应计入 missing，但 got: {r['missing_sources']}"
+    assert "user_hints" in r["missing_sources"]
+    print(f"   ✅ 首章 L1 bridge 允许为空（missing={r['missing_sources']}）")
+
+
+def test_scarcity_virtual_node_skipped():
+    """测试 3.6（修复 P0-2 新增）：虚拟摘要节点直接 proceed
+
+    验证：is_virtual=True 的节点（如 __ch1_summary__）不需要写作，
+    check_info_scarcity 直接返回 proceed，不走 3 项检查。
+    """
+    print("\n=== 测试 3.6：虚拟摘要节点直接 proceed（修复 P0-2） ===")
+    setup_outline()
+
+    r = check_info_scarcity(TEST_PAPER, "__ch1_summary__")
+
+    assert r["ok"] is True
+    assert r["action"] == "proceed"
+    assert r["current_info"].get("is_virtual") is True
+    assert r["missing_sources"] == []
+    print(f"   ✅ 虚拟节点直接 proceed，不走 3 项检查")
 
 
 def test_scarcity_all_present():

@@ -724,7 +724,15 @@ def extract_proposal_content(
                 # 低置信度：不归入，正文全部游离
 
     # ---- 处理正文段落 ----
-    current_node_id: Optional[str] = None
+    # 修复 P0-1：未匹配标题前的段落默认归到第一个 L1 章节，避免 79 段全 unclassified
+    # 找到第一个 L1 节点作为 fallback
+    first_l1_id: Optional[str] = None
+    for node in nodes:
+        if node.get("level") == 1 and not node.get("is_virtual"):
+            first_l1_id = node["id"]
+            break
+
+    current_node_id: Optional[str] = first_l1_id  # 修复 P0-1：默认归到 ch1
     current_paragraphs: List[str] = []
     matched_count = 0
     unclassified: List[Tuple[int, str]] = []
