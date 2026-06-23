@@ -50,6 +50,13 @@ ClawHub 页面：https://clawhub.ai/hehe973781230/thesis-workflow
      → [Phase 5.1 去AI味] → Phase 5.2（Word输出）
 ```
 
+## v1.7.6 新增
+
+- **Orchestrator Phase 1.3 集成**：原 Phase 1 只走「目录确认」直接进 Phase 2，**跳过了开题报告归因**。现在强制走 Phase 1.3：用户上传开题报告 → 自动提取内容 → AI 归因到目录节点 → 细粒度展示每个节点的 `content_hint` + `matched_paragraphs` → 用户可手动调整 → 确认后进 Phase 2
+- **Phase 1.3 状态机**：用枚举字段 `phase1_3_status = "pending|submitted|confirmed|skipped"`，拍板 #1 强制：必须 `confirmed` 才能进 Phase 2
+- **Orchestrator 入口新增 5 个 action**：`phase1_confirm` / `phase1_3_submit` / `phase1_3_update_hint` / `phase1_3_confirm` / `phase1_3_skip`
+- **单元测试扩充**：增加 10 个测试用例（总 63 个），覆盖完整状态机 + 用户调整 + 强制检查 + 端到端集成
+
 ## v1.7.5 新增
 
 - **写作前信息检查**（增强项4）：节点写作前自动检查 3 项信息源（content_hint / user_hints / bridge），任一为空（标准 A）→ 返回 `action="needs_user_input"`，Orchestrator 询问用户 3 个选项：用户提供 hint / AI 自行生成 / 跳过节点

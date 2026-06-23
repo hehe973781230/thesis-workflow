@@ -2,6 +2,50 @@
 
 所有重要更新都会记录在此文件。
 
+## [v1.7.6] - 2026-06-23
+
+### Step 11 — Orchestrator Phase 1.3 集成（开题报告归因子阶段）
+
+**问题**：原 Phase 1 流程只走「目录确认」直接进 Phase 2，**跳过开题报告归因**，导致 Phase 2 第一次写作时所有节点 `content_hint` 为空 → 触发增强项4「写作前信息检查」全节点暂停。
+
+**拍板决策**（龙哥 2026-06-23 确认）：
+- 强制 A：Phase 1.3 必走才能进 Phase 2（不允许跳过生产路径）
+- 方案 B：枚举字段 `phase1_3_status = "pending|submitted|confirmed|skipped"`
+- 时机 A：submit 时一次性写入 state（持久化）
+- 允许用户手动覆盖 content_hint
+- 细粒度：返回每个节点的归因详情（content_hint + matched_paragraphs + matched_count）
+
+### 代码变更
+
+- **`orchestrator_v2.py`**：
+  - `init_orchestrate_state()`：新增 5 个 phase1_3_* 字段
+  - `confirm_phase1()`：修改后不直接进 phase2，保持 phase="phase1"，phase1_3_status="pending"
+  - `orchestrate_phase1_3(docx_path, llm_func)`：提交开题报告做归因，调用 extract_proposal_content + extract_content_hints + save_content_hints_to_outline，返回细粒度 node_details
+  - `update_node_content_hint(node_id, new_hint)`：用户手动调整 content_hint，标记 user_modified
+  - `confirm_phase1_3()`：状态机 submitted → confirmed → phase="phase2"
+  - `skip_phase1_3()`：保留跳过代码路径（拍板 #1 禁用，仅未来扩展）
+  - `orchestrate_phase2()`：强制检查 phase1_3_status == "confirmed"
+  - `orchestrate()` 入口：新增 5 个 Phase 1.3 actions（submit / update_hint / confirm / skip）
+
+- **`scripts/tests/test_orchestrator.py`**：
+  - 更新 test_confirm_phase1：现在 phase="phase1" + phase1_3_status="pending"（Step 11 拍板）
+  - 更新 TestReviewDecision.setUp：调用 skip_phase1_3 进入 phase2（保留原有评审测试路径）
+
+### 测试覆盖（10 个测试用例）
+
+- `test_phase1_3.py`：
+  - init phase1_3 字段默认（1）
+  - confirm_phase1 不进 phase2（1）
+  - 未确认时拒绝 / docx 不存在拒绝（2）
+  - submit 状态机转换（1）
+  - 细粒度 node_details 返回（1）
+  - 用户修改 content_hint（1）
+  - confirm_phase1_3 状态机（1）
+  - Phase 2 强制检查（1）
+  - 端到端集成（1）
+
+总测试数：25 (v1.7.3) + 20 (v1.7.4) + 8 (v1.7.5) + **10 (v1.7.6) = 63 个**
+
 ## [v1.7.5] - 2026-06-23
 
 ### 增强项4 — 写作前信息检查（content_hint 接入 + 信息贫瘠检查）

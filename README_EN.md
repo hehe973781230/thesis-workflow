@@ -56,6 +56,13 @@ User → Phase 1 (Confirmation Checklist) → Phase 2 (Dual-Version Drafting) �
      → Phase 5 (Finalization) → [Phase 5.1 (Optional AI Removal)] → Phase 5.2 (Word Generation)
 ```
 
+## v1.7.6 New
+
+- **Orchestrator Phase 1.3 Integration**: The original Phase 1 only handled directory confirmation and jumped directly to Phase 2, **skipping proposal attribution**. Now Phase 1.3 is mandatory: user uploads proposal → auto-extract content → AI attributes to directory nodes → fine-grained display of each node's `content_hint` + `matched_paragraphs` → user can manually adjust → confirm to enter Phase 2
+- **Phase 1.3 State Machine**: Uses enum field `phase1_3_status = "pending|submitted|confirmed|skipped"`, mandatory per decision #1: must be `confirmed` to enter Phase 2
+- **5 New Orchestrator Actions**: `phase1_confirm` / `phase1_3_submit` / `phase1_3_update_hint` / `phase1_3_confirm` / `phase1_3_skip`
+- **Test Suite Expanded**: 10 additional tests (63 total), covering full state machine + user adjustment + mandatory checks + end-to-end integration
+
 ## v1.7.5 New
 
 - **Pre-Writing Info Check (Enhancement 4)**: Before node writing, automatically check 3 information sources (content_hint / user_hints / bridge). If any one is missing (Standard A), returns `action="needs_user_input"` and Orchestrator asks user for 3 options: provide hint / AI self-generate / skip node

@@ -29,6 +29,10 @@ from outline_parser import (
     insert_chapter_summary_nodes,
     get_chapter_summary_id,
     get_chapter_id_from_summary,
+    extract_proposal_content,
+    extract_content_hints,
+    save_content_hints_to_outline,
+    outline_parse,
 )
 
 
@@ -86,6 +90,11 @@ def init_orchestrate_state(paper_name: str) -> Dict:
         "pending_review": [],     # 待用户确认（medium/low）
         "failed_nodes": [],       # 用户选择跳过的节点
         "phase1_confirmed": False,
+        "phase1_3_status": "pending",   # 增强项4/Step 11: pending|submitted|confirmed|skipped
+        "phase1_3_docx_path": None,     # 上传的开题报告路径
+        "phase1_3_result": None,        # 归因详细结果（细粒度）
+        "phase1_3_submitted_at": None,  # submit 时间戳
+        "phase1_3_confirmed_at": None,  # confirm 时间戳
         "progress": {
             "total": total,
             "completed": 0,
@@ -153,11 +162,141 @@ def orchestrate_phase1(paper_name: str, docx_path: str = None,
     }
 
 
+def orchestrate_phase1_1(
+    paper_name: str,
+    input_type: str,
+    input_data: str,
+    llm_func: Callable[[str], str] = None,
+    docx_path: str = None
+) -> Dict[str, Any]:
+    """
+    Phase 1.1: 解析入口（修订 Step 11 — 龙哥拍板“1.先上传 2.后面才能解析”）
+
+    拍板要点：
+      - 拍板 #1 强制：Phase 1.1 必走（未传任何输入报错）
+      - 拍板 #2 方案 A：合并 phase1_0_upload + phase1_1_parse 为一个 action
+      - 拍板 #3 不要 auto：用户必须明确选 docx 或 text
+      - 拍板 #4 解析失败只能 3 选项：重新输入 docx / 重新输入 text / 取消
+
+    参数：
+      paper_name: 论文名
+      input_type: "docx" | "text" （拍板 #3 禁用 auto）
+      input_data: docx_path 或 outline_text（取决于 input_type）
+      llm_func: LLM 调用函数（可选，AI 兑底匹配标题）
+      docx_path: 保留与 input_data 重复（兼容调用方习惯）
+
+    返回：
+      成功：{
+        ok: True,
+        action: "review_outline",
+        input_type: "docx" | "text",
+        outline: {...},
+        issues: [...],
+        message: "目录已解析，请确认"
+      }
+      失败：{
+        ok: False,
+        action: "input_required",   # 拍板 #4 强制走3选项
+        error: "...",
+        issues: [...],
+        retry_options: {"1": "重新上传 docx", "2": "手动录入目录文本", "3": "取消"}
+      }
+    """
+    # 拍板 #1 强制：未传任何输入报错
+    if input_type not in ("docx", "text"):
+        return {
+            "ok": False,
+            "error": f"拍板 #3 禁用 auto，input_type 必须是 'docx' 或 'text'，实际: {input_type}",
+            "action": "input_required",
+            "retry_options": {
+                "1": "重新上传 docx（input_type=docx）",
+                "2": "手动录入目录文本（input_type=text）",
+                "3": "取消"
+            }
+        }
+
+    if not input_data:
+        return {
+            "ok": False,
+            "error": "input_data 不能为空",
+            "action": "input_required",
+            "retry_options": {
+                "1": "重新上传 docx",
+                "2": "手动录入目录文本",
+                "3": "取消"
+            }
+        }
+
+    # 拍板 #3 不要 auto：用户必须明确选 docx 或 text
+    # docx_path 参数与 input_data 重复时，以 input_data 为准
+    if input_type == "docx":
+        docx_path_to_use = docx_path or input_data
+        if not os.path.exists(docx_path_to_use):
+            return {
+                "ok": False,
+                "error": f"docx 文件不存在: {docx_path_to_use}",
+                "action": "input_required",
+                "retry_options": {
+                    "1": "重新上传 docx",
+                    "2": "手动录入目录文本",
+                    "3": "取消"
+                }
+            }
+        result = outline_parse(docx_path_to_use)
+    else:  # text
+        result = outline_parse(input_data)
+
+    if not result.get("ok"):
+        # 解析失败 → 拍板 #4 走 3 选项
+        return {
+            "ok": False,
+            "action": "input_required",
+            "error": result.get("error", "解析失败"),
+            "issues": result.get("issues", []),
+            "suggestion": result.get("suggestion", ""),
+            "retry_options": {
+                "1": "重新上传 docx（input_type=docx）",
+                "2": "手动录入目录文本（input_type=text）",
+                "3": "取消"
+            }
+        }
+
+    outline = result["outline"]
+
+    # 增强项1：在每个 L1 章节末尾插入虚拟摘要节点
+    outline = insert_chapter_summary_nodes(outline)
+
+    # 持久化 outline_state（包含虚拟节点）
+    outline_save(paper_name, outline)
+
+    # 初始化 orchestrate_state
+    init_orchestrate_state(paper_name)
+
+    # 保存 docx_path 到 state（拍板方案 A：state 只存路径，每次重读）
+    state = load_orchestrate_state(paper_name)
+    if input_type == "docx":
+        state["phase1_3_docx_path"] = docx_path_to_use
+        state["phase1_3_input_type"] = "docx"
+    else:
+        state["phase1_3_docx_path"] = None  # text 输入无 docx
+        state["phase1_3_input_type"] = "text"
+    state["phase1_3_status"] = "pending"
+    state["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    save_orchestrate_state(paper_name, state)
+
+    return {
+        "ok": True,
+        "action": "review_outline",
+        "input_type": input_type,
+        "input_data_preview": input_data[:100] if isinstance(input_data, str) else str(input_data)[:100],
+        "outline": outline,
+        "issues": result.get("issues", []),
+        "summary": result.get("summary", {}),
+        "message": f"目录已解析（input_type={input_type}），请确认后进入 Phase 1.2"
+    }
+
+
 def confirm_phase1(paper_name: str) -> Dict[str, Any]:
-    """
-    用户确认 Phase 1 目录后调用
-    锁定目录结构，进入 Phase 2
-    """
     state = load_orchestrate_state(paper_name)
     if not state:
         return {"ok": False, "error": "状态文件不存在"}
@@ -166,6 +305,216 @@ def confirm_phase1(paper_name: str) -> Dict[str, Any]:
         return {"ok": True, "message": "目录已确认"}
 
     state["phase1_confirmed"] = True
+    # 拍板 #1 强制 + #2 方案 B 枚举字段：保持 phase = "phase1"，
+    # 通过 phase1_3_status 推进子阶段
+    state["phase1_3_status"] = "pending"   # 初始 pending，需用户提交 docx
+    state["phase"] = "phase1"              # 主阶段仍是 phase1
+
+    save_orchestrate_state(paper_name, state)
+
+    return {
+        "ok": True,
+        "phase": "phase1",
+        "phase1_3_status": "pending",
+        "message": "目录已确认，下一步：进入 Phase 1.3 开题报告归因"
+    }
+
+
+# ============================================================
+# Phase 1.3: 开题报告归因（Step 11）
+# ============================================================
+
+def orchestrate_phase1_3(
+    paper_name: str,
+    docx_path: str = None,
+    llm_func: Callable[[str], str] = None
+) -> Dict[str, Any]:
+    """
+    Phase 1.3: 开题报告归因（增强项4 content_hint 接入链路）
+
+    流程：
+      1. 检查 phase1_confirmed == True
+      2. 检查 docx_path 存在且可读
+      3. 调用 extract_proposal_content() 提取并归因开题报告内容
+      4. 调用 extract_content_hints() 提炼每个节点的 content_hint
+      5. save_content_hints_to_outline() 写入 state
+      6. 设置 phase1_3_status = "submitted"，保存归因详情
+
+    拍板 #3 时机 A：submit 时一次性写入 state（持久化）。
+    拍板 #5 细粒度：返回每个节点的归因详情（content_hint + matched paragraphs + confidence）。
+
+    返回：
+      {
+        ok: True,
+        phase1_3_status: "submitted",
+        docx_path: str,
+        summary: {matched, orphan, ai_heading_matched, ai_classified, total_paragraphs},
+        node_details: {
+          "1.1": {"content_hint": "...", "matched_paragraphs": [...], "confidence": ...},
+          ...
+        },
+        orphan_segments: [...],
+        message: str
+      }
+    """
+    state = load_orchestrate_state(paper_name)
+    if not state:
+        return {"ok": False, "error": "状态文件不存在"}
+
+    if not state.get("phase1_confirmed"):
+        return {"ok": False, "error": "Phase 1 目录未确认"}
+
+    if state.get("phase1_3_status") not in ("pending", "submitted"):
+        return {"ok": False, "error": f"Phase 1.3 状态异常: {state.get('phase1_3_status')}"}
+
+    # 修订 11.9：优先从 state 读 docx_path（推荐方案 A：每次重读，state 只存路径）
+    if not docx_path:
+        docx_path = state.get("phase1_3_docx_path")
+    if not docx_path:
+        return {"ok": False, "error": "未指定 docx_path，且 state 中无存档。请先调用 phase1_1_init 提交 docx。"}
+
+    if not os.path.exists(docx_path):
+        return {
+            "ok": False,
+            "error": f"开题报告文件不存在: {docx_path}",
+            "action": "input_required",
+            "retry_options": {
+                "1": "重新上传 docx（不同文件）",
+                "2": "切换到手动录入目录文本",
+                "3": "取消"
+            }
+        }
+
+    # 1. 读取目录树
+    outline_state = outline_load(paper_name)
+    if not outline_state:
+        return {"ok": False, "error": "目录树未初始化"}
+    outline_tree = outline_state["outline"]
+
+    # 2. extract_proposal_content 提取并归因（细粒度）
+    proposal_result = extract_proposal_content(
+        docx_path, outline_tree, llm_func=llm_func
+    )
+    if not proposal_result.get("ok"):
+        return {
+            "ok": False,
+            "error": proposal_result.get("error", "开题报告提取失败")
+        }
+
+    # 3. extract_content_hints 提炼
+    content_hints = extract_content_hints(
+        docx_path, outline_tree, llm_func=llm_func
+    )
+
+    # 4. save_content_hints_to_outline 写入 state
+    save_result = save_content_hints_to_outline(paper_name, content_hints)
+
+    # 5. 组装细粒度 node_details（拍板 #5）
+    nodes = outline_tree["outline_tree"]["nodes"]
+    node_id_set = {n["id"] for n in nodes}
+    node_details = {}
+    for node_id in node_id_set:
+        node = next((n for n in nodes if n["id"] == node_id), None)
+        node_segments = proposal_result.get("node_segments", {}).get(node_id, [])
+        node_details[node_id] = {
+            "title": node.get("title", "") if node else "",
+            "level": node.get("level", 0) if node else 0,
+            "content_hint": content_hints.get(node_id, ""),
+            "matched_paragraphs": node_segments[:3],  # 前3段预览
+            "matched_count": len(node_segments),
+            "has_hint": bool(content_hints.get(node_id))
+        }
+
+    # 6. 更新 state
+    state["phase1_3_status"] = "submitted"
+    state["phase1_3_docx_path"] = docx_path
+    state["phase1_3_submitted_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    state["phase1_3_result"] = {
+        "summary": {
+            "total_paragraphs": proposal_result.get("total_paragraphs", 0),
+            "matched_paragraphs": proposal_result.get("matched_paragraphs", 0),
+            "ai_heading_matched": proposal_result.get("ai_heading_matched", 0),
+            "ai_classified": proposal_result.get("ai_classified", 0),
+            "orphan_segments": len(proposal_result.get("orphan_segments", [])),
+            "undecided_segments": len(proposal_result.get("undecided_segments", [])),
+            "hints_written": save_result.get("written", 0),
+            "hints_skipped": save_result.get("skipped", 0),
+        },
+        "node_details": node_details,
+    }
+    state["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    save_orchestrate_state(paper_name, state)
+
+    return {
+        "ok": True,
+        "phase1_3_status": "submitted",
+        "docx_path": docx_path,
+        "summary": state["phase1_3_result"]["summary"],
+        "node_details": node_details,
+        "orphan_segments": proposal_result.get("orphan_segments", []),
+        "message": f"开题报告归因完成：{state['phase1_3_result']['summary']}"
+    }
+
+
+def update_node_content_hint(
+    paper_name: str,
+    node_id: str,
+    new_hint: str
+) -> Dict[str, Any]:
+    """
+    用户在 Phase 1.3 查看归因详情后，可手动调整单个节点的 content_hint。
+    拍板 #4：允许用户覆盖。
+
+    只能在 phase1_3_status in (submitted, confirmed) 时调用。
+    """
+    state = load_orchestrate_state(paper_name)
+    if not state:
+        return {"ok": False, "error": "状态文件不存在"}
+
+    p13_status = state.get("phase1_3_status")
+    if p13_status not in ("submitted", "confirmed"):
+        return {"ok": False, "error": f"Phase 1.3 状态为 {p13_status}，不能修改 content_hint"}
+
+    if not new_hint or not new_hint.strip():
+        return {"ok": False, "error": "new_hint 不能为空"}
+
+    outline_update_status(paper_name, node_id, "pending", content_hint=new_hint.strip())
+
+    # 同步更新 phase1_3_result.node_details 中的 content_hint
+    if state.get("phase1_3_result") and state["phase1_3_result"].get("node_details"):
+        nd = state["phase1_3_result"]["node_details"]
+        if node_id in nd:
+            nd[node_id]["content_hint"] = new_hint.strip()
+            nd[node_id]["has_hint"] = True
+            nd[node_id]["user_modified"] = True
+            save_orchestrate_state(paper_name, state)
+
+    return {
+        "ok": True,
+        "node_id": node_id,
+        "content_hint": new_hint.strip(),
+        "message": f"节点 {node_id} content_hint 已更新"
+    }
+
+
+def confirm_phase1_3(paper_name: str) -> Dict[str, Any]:
+    """
+    用户确认 Phase 1.3 归因后调用。
+    phase1_3_status = "confirmed"，phase = "phase2"。
+    拍板 #1 强制：必须确认才能进 Phase 2。
+    """
+    state = load_orchestrate_state(paper_name)
+    if not state:
+        return {"ok": False, "error": "状态文件不存在"}
+
+    if state.get("phase1_3_status") == "confirmed":
+        return {"ok": True, "message": "Phase 1.3 已确认"}
+
+    if state.get("phase1_3_status") != "submitted":
+        return {"ok": False, "error": f"Phase 1.3 状态为 {state.get('phase1_3_status')}，未提交"}
+
+    state["phase1_3_status"] = "confirmed"
+    state["phase1_3_confirmed_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
     state["phase"] = "phase2"
 
     # 获取第一个节点
@@ -174,13 +523,46 @@ def confirm_phase1(paper_name: str) -> Dict[str, Any]:
     first_node = nodes[0] if nodes else None
     state["current_node_id"] = first_node["id"] if first_node else None
 
+    state["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
     save_orchestrate_state(paper_name, state)
 
     return {
         "ok": True,
         "phase": "phase2",
+        "phase1_3_status": "confirmed",
         "current_node_id": state["current_node_id"],
-        "message": f"目录已确认，Phase 2 开始，当前节点：{state['current_node_id']}"
+        "message": f"Phase 1.3 已确认，进入 Phase 2，当前节点：{state['current_node_id']}"
+    }
+
+
+def skip_phase1_3(paper_name: str) -> Dict[str, Any]:
+    """
+    跳过 Phase 1.3（保留代码路径，拍板 #1 默认禁用）。
+
+    ⚠️ 拍板 #1「强制」：默认不允许跳过。
+    本函数仅用于未来放宽策略或调试，生产环境由 orchestrator 入口禁用。
+    """
+    state = load_orchestrate_state(paper_name)
+    if not state:
+        return {"ok": False, "error": "状态文件不存在"}
+
+    state["phase1_3_status"] = "skipped"
+    state["phase"] = "phase2"
+
+    outline_state = outline_load(paper_name)
+    nodes = outline_state["outline"]["outline_tree"]["nodes"]
+    first_node = nodes[0] if nodes else None
+    state["current_node_id"] = first_node["id"] if first_node else None
+
+    state["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    save_orchestrate_state(paper_name, state)
+
+    return {
+        "ok": True,
+        "phase": "phase2",
+        "phase1_3_status": "skipped",
+        "current_node_id": state["current_node_id"],
+        "message": "Phase 1.3 已跳过，进入 Phase 2（注意：content_hint 全部为空）"
     }
 
 
@@ -363,6 +745,13 @@ def orchestrate_phase2(paper_name: str,
 
     if not state.get("phase1_confirmed"):
         return {"ok": False, "error": "Phase 1 目录未确认"}
+
+    # Step 11 拍板 #1 强制：Phase 1.3 必须确认才能进 Phase 2
+    if state.get("phase1_3_status") != "confirmed":
+        return {
+            "ok": False,
+            "error": f"Phase 1.3 未确认（当前状态: {state.get('phase1_3_status')}），请先提交并确认开题报告归因"
+        }
 
     if state["phase"] not in ("phase2",):
         return {"ok": False, "error": f"当前阶段为 {state['phase']}，不是 phase2"}
@@ -669,33 +1058,83 @@ def orchestrate(paper_name: str,
 
     phase:
       None / "auto": 根据当前状态自动判断
-      "phase1": 目录确认
+      "phase1": 目录确认（Phase 1.2 confirm + Phase 1.3 submit/confirm/skip）
       "phase2": 智能写作
       "phase3": 整合 + 修改 + 输出
 
     action（可选）:
+      "phase1_1_init": 解析入口（Phase 1.1，修订 Step 11 — input_type=docx|text）
+      "phase1_confirm": 锁定目录结构（Phase 1.2）
+      "phase1_3_submit": 提交开题报告做归因（Phase 1.3 提交，docx_path 从 state 读）
+      "phase1_3_update_hint": 修改节点 content_hint（Phase 1.3 手动调整）
+      "phase1_3_confirm": 确认归因，进入 Phase 2（Phase 1.3 确认）
+      "phase1_3_skip": 跳过 Phase 1.3（拍板 #1 禁用）
       "phase3_review": 生成论文供用户预览
       "phase3_feedback": 处理用户修改意见
       "phase3_export": 确认并导出 Word
 
-    llm_func: LLM 调用函数，Phase 2 和 phase3_feedback 需要提供
+    llm_func: LLM 调用函数，Phase 1.3 submit / phase3_feedback 需要提供
 
-    kwargs: 额外参数（如 feedback, decision 等）
+    kwargs: 额外参数（如 docx_path, node_id, new_hint, feedback, decision 等）
     """
     state = load_orchestrate_state(paper_name)
 
     if phase is None or phase == "auto":
         if not state:
             phase = "phase1"
+            # 如果连 state 都没有且用户提供了 input_data，提示先走 phase1_1_init
+            if action is None:
+                return {
+                    "ok": False,
+                    "error": "状态文件不存在。请先调用 phase1_1_init 解析开题报告（docx 或 文本）",
+                    "next_action": "phase1_1_init"
+                }
         elif not state.get("phase1_confirmed"):
             phase = "phase1"
         elif state["phase"] == "phase1":
-            phase = "phase2"
+            # 拍板 #1 强制：Phase 1.2 确认后必须走 Phase 1.3
+            p13_status = state.get("phase1_3_status")
+            if p13_status == "confirmed":
+                phase = "phase2"
+            elif p13_status == "submitted":
+                # 需要用户确认归因
+                phase = "phase1"
+            else:
+                # pending：需提交开题报告
+                phase = "phase1"
         else:
             phase = state.get("phase", "phase2")
 
     if phase == "phase1":
-        return orchestrate_phase1(paper_name, **kwargs)
+        # Step 11 修订 Phase 1.1 入口
+        if action == "phase1_1_init":
+            input_type = kwargs.get("input_type")
+            input_data = kwargs.get("input_data") or kwargs.get("docx_path") or kwargs.get("outline_text")
+            docx_path = kwargs.get("docx_path")
+            if not input_type:
+                return {"ok": False, "error": "phase1_1_init 需要 input_type（docx 或 text）"}
+            if not input_data:
+                return {"ok": False, "error": "phase1_1_init 需要 input_data（docx_path 或 outline_text）"}
+            return orchestrate_phase1_1(paper_name, input_type, input_data, llm_func, docx_path)
+        elif action == "phase1_confirm":
+            return confirm_phase1(paper_name)
+        elif action == "phase1_3_submit":
+            # 修订 11.9：docx_path 从 state 读，不再要求传
+            docx_path = kwargs.get("docx_path")  # 可选，仅用于覆盖
+            return orchestrate_phase1_3(paper_name, docx_path, llm_func)
+        elif action == "phase1_3_update_hint":
+            node_id = kwargs.get("node_id")
+            new_hint = kwargs.get("new_hint")
+            if not node_id or new_hint is None:
+                return {"ok": False, "error": "phase1_3_update_hint 需要 node_id 和 new_hint"}
+            return update_node_content_hint(paper_name, node_id, new_hint)
+        elif action == "phase1_3_confirm":
+            return confirm_phase1_3(paper_name)
+        elif action == "phase1_3_skip":
+            return skip_phase1_3(paper_name)
+        else:
+            # 默认：Phase 1.2 提示确认
+            return orchestrate_phase1(paper_name, **kwargs)
 
     elif phase == "phase2":
         if not llm_func:

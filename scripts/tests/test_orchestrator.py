@@ -80,8 +80,9 @@ class TestPhase1(unittest.TestCase):
     def test_confirm_phase1(self):
         result = confirm_phase1(self.paper_name)
         self.assertTrue(result["ok"])
-        self.assertEqual(result["phase"], "phase2")
-        self.assertIsNotNone(result["current_node_id"])
+        # Step 11 拍板 #1 强制：confirm_phase1 后不进 phase2，需走 Phase 1.3
+        self.assertEqual(result["phase"], "phase1")
+        self.assertEqual(result["phase1_3_status"], "pending")
 
     def test_phase1_already_confirmed(self):
         confirm_phase1(self.paper_name)
@@ -119,6 +120,9 @@ class TestReviewDecision(unittest.TestCase):
         self.paper_name = setup_mock_state()
         init_orchestrate_state(self.paper_name)
         confirm_phase1(self.paper_name)
+        # Step 11: 走完 Phase 1.3 才能进 phase2（手动跳过以保持原有测试环境）
+        from orchestrator_v2 import skip_phase1_3
+        skip_phase1_3(self.paper_name)
 
         # 模拟节点进入待确认
         state = load_orchestrate_state(self.paper_name)
