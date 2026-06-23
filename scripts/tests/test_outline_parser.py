@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
 test_outline_parser.py - 目录解析器单元测试
-基于3份真实样本验证（朱骏、冯伟军、徐龙）
+
+⚠️ 隐私警告：docx 样本含学生姓名/学号/研究方向，严禁上传到 GitHub。
+默认使用 mock 文本样本。如需验证真实 docx，设置环境变量
+MBA_REAL_SAMPLES_DIR 指向本地样本目录，样本自动匿名发现。
+详见 tests/REAL_SAMPLES_README.md。
 """
 
 import sys
@@ -10,22 +14,31 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from outline_parser import (
-    outline_parse, validate_manual_input, 
-    extract_outline_from_docx, 
+    outline_parse, validate_manual_input,
+    extract_outline_from_docx,
     MANUAL_INPUT_TEMPLATE
 )
 
-# 样本路径
-SAMPLES_DIR = os.path.expanduser("~/.openclaw/workspace/开题报告样本")
 
-SAMPLES = [
-    ("朱骏_v1", f"{SAMPLES_DIR}/01_朱骏_开题报告.docx"),
-    ("朱骏_v2", f"{SAMPLES_DIR}/02_朱骏_开题报告.docx"),
-    ("朱骏_v3", f"{SAMPLES_DIR}/03_朱骏_开题报告.docx"),
-    ("冯伟军", f"{SAMPLES_DIR}/04_冯伟军_开题报告.docx"),
-    ("徐龙_v1", f"{SAMPLES_DIR}/05_徐龙_开题报告.docx"),
-    ("徐龙_v2", f"{SAMPLES_DIR}/06_徐龙_v2_开题报告.docx"),
-]
+def _discover_real_samples():
+    """
+    从环境变量 MBA_REAL_SAMPLES_DIR 指定的目录中发现 docx 文件。
+    返回 [(idx, full_path), ...]，idx 从 1 开始。
+    若环境变量未设置或目录不存在，返回空列表。
+    """
+    samples_dir = os.environ.get("MBA_REAL_SAMPLES_DIR")
+    if not samples_dir or not os.path.isdir(samples_dir):
+        return []
+    docx_files = sorted(
+        f for f in os.listdir(samples_dir)
+        if f.lower().endswith(".docx") and not f.startswith("~")
+    )
+    return [(i + 1, os.path.join(samples_dir, f)) for i, f in enumerate(docx_files)]
+
+
+# 隐私保护：SAMPLES 列表由环境变量动态发现，默认空。
+# 变量名保留 SAMPLES 以兼容既有调用，仅内容为匿名索引。
+SAMPLES = _discover_real_samples()
 
 
 def test_docx_samples():
@@ -42,7 +55,7 @@ def test_docx_samples():
             continue
         
         print(f"\n📄 测试: {name}")
-        print(f"   路径: {path}")
+        print(f"   文件: {os.path.basename(path)}（{os.path.getsize(path)//1024} KB）")
         
         tree, issues = extract_outline_from_docx(path)
         

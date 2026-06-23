@@ -91,6 +91,21 @@ ClawHub 页面：https://clawhub.ai/hehe973781230/thesis-workflow
 
 总测试数 **72 个**，全部通过 ✅。详见 `CHANGELOG.md`。
 
+## v2.0.1 🐛
+
+- **Bug 修复**：`_get_prev_chapter_summary()` 对 L3 首节点误判（增加 `parent_id != chapter_id` 过滤）
+- **方案 C 端到端验证（按龙哥拍板）**：
+  - 思路：方案 A（mock 边界） + 方案 B（真实样本）精华
+  - 选项 X：扩到现有 `test_full_workflow.py`（不新建文件）
+  - 推荐 α：commit + push（让 ClawHub 用户也能跑）
+- **test_full_workflow.py 扩充**：从 3 个集成测试扩展到 10 个测试场景（Part 2 真实样本默认跳过）
+  - Part 0：Step 12 全链路集成（A/B/C）— 3 个测试
+  - Part 1：7 个 mock 边界测试（content_hint 一致性 / 章节摘要边界 / state schema / 3 决策路径 / 链式摘要 / 失败回退 / Phase 2 强制）
+  - Part 2：真实 docx 端到端测试（**默认跳过**，需设 `MBA_REAL_SAMPLES_DIR` 环境变量）
+- **隐私保护**：开题报告含学生姓名/学号/研究方向，**严禁上传到 GitHub**。真实样本测试仅本地可选，详细使用见 `tests/REAL_SAMPLES_README.md`
+
+总测试数 **102 个**（v2.0.0 72 + Step 12 集成 3 + 方案 A 7 = 102），默认全部通过 ✅。
+
 ## v1.7.3 新增
 
 - **Orchestrator 自动推进**：`scripts/orchestrator.py` 决策引擎 + 审核 Loop 自动重审

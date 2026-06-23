@@ -251,9 +251,13 @@ def _get_prev_chapter_summary(node: Dict, nodes: List[Dict], node_map: Dict) -> 
     if not chapter_id or not chapter_id.startswith("ch"):
         return None
 
-    # 仅当当前节点是章节首节点（prev_sibling_id == None）才查上一章节摘要
+    # 仅当当前节点是 L2 章节首节点才查上一章节摘要
+    # 必须是直接子节点（parent_id == chapter_id）且是首节点（prev_sibling_id == None）
+    # 排除 L3 节点（其 parent 是 L2 不是 L1）
+    if node.get("parent_id") != chapter_id:
+        return None  # 不是直接属于该章节（L3 节点的 parent 是 L2）
     if node.get("prev_sibling_id") is not None:
-        return None
+        return None  # 不是章节首节点
 
     # 推算上一章节 ID（ch1 -> chN-1）
     try:

@@ -97,6 +97,21 @@ User → Phase 1 (Confirmation Checklist) → Phase 2 (Dual-Version Drafting) �
 
 Total tests: **72**, all passing ✅. See `CHANGELOG.md` for details.
 
+## v2.0.1 🐛
+
+- **Bug Fix**: `_get_prev_chapter_summary()` misjudged L3 first nodes (added `parent_id != chapter_id` filter)
+- **Plan C E2E Validation (per 龙哥's decision)**:
+  - Approach: Plan A (mock boundaries) + Plan B (real samples) essence
+  - Option X: Extend existing `test_full_workflow.py` (no new file)
+  - Recommendation α: commit + push (so ClawHub users can also run)
+- **test_full_workflow.py expansion**: 3 → 10 test scenarios (Part 2 real samples skipped by default)
+  - Part 0: Step 12 full-chain integration (A/B/C) — 3 tests
+  - Part 1: 7 mock boundary tests (content_hint consistency / chapter summary boundaries / state schema / 3 decision paths / chained summaries / failure recovery / Phase 2 enforcement)
+  - Part 2: real docx E2E tests (**skipped by default**, opt-in via `MBA_REAL_SAMPLES_DIR` env var)
+- **Privacy protection**: Proposal documents contain student names/IDs/research directions — **NEVER upload to GitHub**. Real sample testing is local-only opt-in. See `tests/REAL_SAMPLES_README.md`.
+
+Total tests **102** (v2.0.0 72 + Step 12 integration 3 + Plan A 7 = 102), all passing by default ✅.
+
 ## v1.7.3 New
 
 - **Orchestrator Auto-Advance**: `scripts/orchestrator.py` decision engine + Review Loop auto-revision

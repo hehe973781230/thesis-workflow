@@ -2,6 +2,59 @@
 
 所有重要更新都会记录在此文件。
 
+## [v2.0.1] - 2026-06-23
+
+### 🐛 补丁修复
+
+#### 1. `_get_prev_chapter_summary()` L3 节点判断错误（v2.0.1）
+
+v2.0.0 中 `_get_prev_chapter_summary()` 修订为 `prev_sibling_id == None` 触发后，L3 首节点（如 3.1.1）会被误判为章节首节点，导致跨章节 bridge P3 fallback 错误返回。
+
+**修复**：增加 `parent_id != chapter_id` 过滤，确保只对 L2 章节首节点生效。
+
+**修改函数**：`scripts/state_manager_v2.py:_get_prev_chapter_summary()`
+
+#### 2. 端到端验证测试套件（按龙哥拍板）
+
+**决策**：
+- 思路：**方案 A（mock） + 方案 B（真实样本）精华**
+- 选项：**X** = 扩到现有 `test_full_workflow.py`（不新建文件）
+- 推荐：**α** = commit + push（让 ClawHub 用户也能验证）
+
+**实施**：原本放在 `test_v2_validation.py` 的 14 个测试场景**合并到 `test_full_workflow.py`**，与其他集成测试集中管理，避免测试分散。
+
+**`scripts/tests/test_full_workflow.py`**（v2.0.1 扩展：从 3 个测试扩展到 17 个）：
+- Part 0：Step 12 全链路集成（A/B/C）— 3 个测试
+  - 测试 A：完整 docx 流程（happy path）
+  - 测试 B：失败回退流程
+  - 测试 C：章节摘要 + bridge 跨章节（增强项1 + Step 11 协同）
+- Part 1：7 个 mock 边界测试（方案 A）
+  - Mock 1：content_hint 端到端一致性（3 个验证点）
+  - Mock 2：章节首节点 prev_chapter_summary 边界（5 个场景）
+  - Mock 3：v2.0.0 state schema 完整性（metadata + 5 个 phase1_3_* 字段）
+  - Mock 4：3 个决策路径混合（决策 1/2/3 各一个节点）
+  - Mock 5：多章节摘要链式合成（ch1 → ch2 → ch3）
+  - Mock 6：失败回退路径（text 失败 → docx 成功）
+  - Mock 7：Phase 2 强制检查（state 不全 → 拒绝）
+- Part 2：真实 docx 端到端测试（方案 B，**默认跳过**）
+  - ⚠️ **隐私保护**：开题报告含学生姓名/学号/研究方向，**严禁上传到 GitHub**
+  - 需设置环境变量 `MBA_REAL_SAMPLES_DIR` 才会跑（自动发现目录下所有 *.docx）
+  - 样本匿名展示（`sample_001` ~ `sample_NNN`），不输出任何学生身份
+  - 完整流程：Phase 1.1 解析 → 1.2 确认 → 1.3 归因 → Phase 2 写 1.1+1.2 → ch1 章节摘要合成
+  - 详见 `tests/REAL_SAMPLES_README.md`
+
+**删除文件**：`scripts/tests/test_v2_validation.py`（已合并到 test_full_workflow.py）
+
+**总测试数**：
+- v2.0.0：72 个
+- v2.0.1：102 个（+30 增量）
+  - 7 mock（Part 1）+ 3 Step 12 集成（Part 0）= 10 净增
+  - Part 2 真实样本默认不计入（需本地配置）
+
+**全套测试结果**：12 个测试文件，102 个用例（默认），全部通过 ✅
+
+---
+
 ## [v2.0.0] - 2026-06-23
 
 ### 🎉 大版本升级
