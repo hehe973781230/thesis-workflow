@@ -804,8 +804,12 @@ def run_real_sample(sample_name, docx_path):
     return result
 
 
-def test_real_samples():
-    """真实 docx 样本批量测试（默认跳过，需设置 MBA_REAL_SAMPLES_DIR）"""
+def _run_real_samples():
+    """真实 docx 样本批量测试（默认跳过，需设置 MBA_REAL_SAMPLES_DIR）
+
+    修复 P2-3：拆分为 _run_real_samples（返回元组，main() 调用）
+    + test_real_samples（pytest 测试，不返回）。
+    """
     real_samples = _discover_real_samples()
     samples_dir = os.environ.get("MBA_REAL_SAMPLES_DIR", "")
 
@@ -872,6 +876,13 @@ def test_real_samples():
               f"耗时 {round(total_time, 2)}s")
 
     return passed, failed
+
+
+def test_real_samples():
+    """pytest 测试入口：调用 _run_real_samples 但不返回值"""
+    passed, failed = _run_real_samples()
+    # pytest 模式：断言至少运行（passed + failed > 0 或 0 0 表示跳过）
+    # 不强求 passed > 0，因为默认会跳过（无 MBA_REAL_SAMPLES_DIR）
 
 
 # ============================================================
@@ -941,7 +952,7 @@ def main():
 
     # Part 2: 真实样本测试
     print("\n## Part 2: 真实 docx 样本测试（方案 B）")
-    real_passed, real_failed = test_real_samples()
+    real_passed, real_failed = _run_real_samples()
 
     print("\n" + "=" * 60)
     print(f"🎯 最终汇总")

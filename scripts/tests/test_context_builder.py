@@ -83,8 +83,9 @@ def test_extract_keyword():
         ("1.1.1 行业背景分析", "行业背景分析"),
         ("第3章 A公司互联网分发业务外部环境分析", "A公司互联网分发业务外部环境分析"),
     ]
-    
+
     all_pass = True
+    failures = []
     for title, expected in cases:
         result = extract_keyword(title)
         ok = expected in result or result == expected
@@ -92,8 +93,9 @@ def test_extract_keyword():
         print(f"  {status} '{title}' → '{result}' (期望含'{expected}')")
         if not ok:
             all_pass = False
-    
-    return all_pass
+            failures.append(f"'{title}' → '{result}' (期望含'{expected}')")
+
+    assert all_pass, f"extract_keyword 失败: {failures}"
 
 
 def test_word_count_range():
@@ -108,8 +110,9 @@ def test_word_count_range():
         (3, 300, 800),
         (99, 500, 1200),  # 未知层级用默认
     ]
-    
+
     all_pass = True
+    failures = []
     for level, expected_min, expected_max in cases:
         result = get_word_count_range(level)
         ok = result["min"] == expected_min and result["max"] == expected_max
@@ -117,8 +120,9 @@ def test_word_count_range():
         print(f"  {status} level={level} → min={result['min']} max={result['max']}")
         if not ok:
             all_pass = False
-    
-    return all_pass
+            failures.append(f"level={level} → min={result['min']} max={result['max']}")
+
+    assert all_pass, f"word_count_range 失败: {failures}"
 
 
 def test_infer_topics():
@@ -151,8 +155,9 @@ def test_infer_topics():
         print(f"       → {result}")
         if not ok:
             all_pass = False
-    
-    return all_pass
+            failures.append(f"level={node['level']} {node['title']} → {result}")
+
+    assert all_pass, f"infer_topics 失败: {failures}"
 
 
 def test_generate_bridge():
@@ -202,8 +207,10 @@ def test_generate_bridge():
     ok3 = result3 is None
     print(f"  {'✅' if ok3 else '❌'} 首个节点 → {result3} (期望 null)")
     all_pass = all_pass and ok3
-    
-    return all_pass
+    if not all_pass:
+        failures.append("generate_bridge 场景失败")
+
+    assert all_pass, f"generate_bridge 失败: {failures}"
 
 
 def test_generate_ending_hint():
@@ -230,8 +237,10 @@ def test_generate_ending_hint():
     ok2 = result2 is None
     print(f"  {'✅' if ok2 else '❌'} → {result2} (期望 null)")
     all_pass = all_pass and ok2
-    
-    return all_pass
+    if not all_pass:
+        failures.append("generate_ending_hint 场景失败")
+
+    assert all_pass, f"generate_ending_hint 失败: {failures}"
 
 
 def test_build_prompt_package():
@@ -243,7 +252,8 @@ def test_build_prompt_package():
     paper_name = setup_mock_state()
     
     all_pass = True
-    
+    failures = []
+
     # 测试节点 ch1（首个节点，无前序）
     print("\n  测试节点 ch1（首个节点）")
     pkg1 = build_prompt_package(paper_name, "ch1")
@@ -275,8 +285,10 @@ def test_build_prompt_package():
     # 所以即使写了 1.2 的 key_conclusion，bridge_paragraph 也是 None
     # 这是正确的：跨父节点链的 bridge 需要后续增强
     print("\n  注：2.1 内部无前序兄弟，bridge_paragraph = null（跨链 bridge 待后续支持）")
-    
-    return all_pass
+    if not all_pass:
+        failures.append("build_prompt_package 场景失败")
+
+    assert all_pass, f"build_prompt_package 失败: {failures}"
 
 
 def test_build_prompt_package_text():
@@ -294,8 +306,10 @@ def test_build_prompt_package_text():
     
     ok = "# 写作任务" in text and "1.1 研究背景" in text
     print(f"\n{'✅ 文本格式正确' if ok else '❌ 文本格式错误'}")
-    
-    return ok
+    if not ok:
+        failures.append("'# 写作任务' 或 '1.1 研究背景' 不在文本中")
+
+    assert ok, f"build_prompt_package_text 失败: {failures}"
 
 
 def main():

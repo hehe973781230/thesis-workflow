@@ -41,7 +41,7 @@ def _discover_real_samples():
 SAMPLES = _discover_real_samples()
 
 
-def test_docx_samples():
+def _run_docx_samples():
     """测试所有 docx 样本"""
     print("=" * 60)
     print("测试 docx 样本解析")
@@ -86,7 +86,7 @@ def test_docx_samples():
     return results
 
 
-def test_manual_input_validation():
+def _run_manual_input_validation():
     """测试手动输入验证"""
     print("\n" + "=" * 60)
     print("测试手动输入验证")
@@ -154,6 +154,26 @@ def test_manual_input_validation():
     return results
 
 
+def test_docx_samples():
+    """pytest 测试入口：调用 _run_docx_samples"""
+    results = _run_docx_samples()
+    # 至少跑过
+    assert results is not None
+    # 至少有一个样本且全部通过（如果有样本的话）
+    if results:
+        failed = [name for name, ok, *_ in results if not ok]
+        assert not failed, f"失败样本: {failed}"
+
+
+def test_manual_input_validation():
+    """pytest 测试入口：调用 _run_manual_input_validation"""
+    results = _run_manual_input_validation()
+    assert results is not None
+    if results:
+        failed = [name for name, ok in results if not ok]
+        assert not failed, f"失败用例: {failed}"
+
+
 def test_manual_template():
     """验证手动输入示例模板"""
     print("\n" + "=" * 60)
@@ -167,10 +187,10 @@ def main():
     print("")
     
     # 测试 docx 样本
-    docx_results = test_docx_samples()
-    
+    docx_results = _run_docx_samples()
+
     # 测试手动输入验证
-    manual_results = test_manual_input_validation()
+    manual_results = _run_manual_input_validation()
     
     # 统计
     print("\n" + "=" * 60)
