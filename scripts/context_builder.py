@@ -369,6 +369,9 @@ def build_prompt_package(paper_name: str, node_id: str) -> Dict[str, Any]:
     word_range = get_word_count_range(level)
     
     # 6. 组装 prompt 包
+    # 增强项4: content_hint 字段（从 outline_state 节点字段读取，开题报告提取或用户手写）
+    content_hint = current.get("content_hint", "").strip()
+
     package = {
         "ok": True,
         "writing_instruction": f"请生成「{current['title']}」的内容",
@@ -382,12 +385,13 @@ def build_prompt_package(paper_name: str, node_id: str) -> Dict[str, Any]:
         "bridge_paragraph": bridge_paragraph,  # 可能为 null
         "required_topics": required_topics,
         "ending_hint": ending_hint,  # 可能为 null
+        "content_hint": content_hint,  # 增强项4: 开题报告提取或用户手写
         "word_count_min": word_range["min"],
         "word_count_max": word_range["max"],
         "writing_style": "学术论文",
         "outline_position": build_outline_position(current, context)
     }
-    
+
     return package
 
 
@@ -420,7 +424,11 @@ def build_prompt_package_text(package: Dict) -> str:
         parts.append(f"\n## 分析维度建议\n")
         for topic in package['required_topics']:
             parts.append(f"- {topic}\n")
-    
+
+    if package.get('content_hint'):
+        parts.append(f"\n## 开题报告方向参考\n")
+        parts.append(f"{package['content_hint']}\n")
+
     if package.get('ending_hint'):
         parts.append(f"\n## 结尾预告\n")
         parts.append(f"{package['ending_hint']}\n")

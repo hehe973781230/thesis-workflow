@@ -74,17 +74,19 @@ VALID_STATUSES = {"pending", "writing", "reviewing", "approved", "failed", "comp
 def outline_update_status(paper_name: str, node_id: str, status: str,
                           retry_count: int = None, key_conclusion: str = None,
                           word_count: int = None,
-                          content: str = None) -> Dict[str, Any]:
+                          content: str = None,
+                          content_hint: str = None) -> Dict[str, Any]:
     """
     更新节点状态
+    支持额外字段更新：content_hint (增强项4 写作前信息检查)
     """
     if status not in VALID_STATUSES:
         return {"ok": False, "error": f"无效状态: {status}"}
-    
+
     state = outline_load(paper_name)
     if not state:
         return {"ok": False, "error": "目录树未初始化"}
-    
+
     # 更新节点状态
     nodes = state["outline"]["outline_tree"]["nodes"]
     node_found = False
@@ -97,6 +99,8 @@ def outline_update_status(paper_name: str, node_id: str, status: str,
                 node["word_count"] = word_count
             if content is not None:
                 node["content"] = content
+            if content_hint is not None:
+                node["content_hint"] = content_hint
             node_found = True
             break
     

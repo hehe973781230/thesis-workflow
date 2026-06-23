@@ -2,6 +2,44 @@
 
 所有重要更新都会记录在此文件。
 
+## [v1.7.5] - 2026-06-23
+
+### 增强项4 — 写作前信息检查（content_hint 接入 + 信息贫瘠检查）
+
+**问题**：节点写作前如果完全没有外部信息（content_hint 空 + 用户 hints 空 + bridge 三级全空），NodeWriter 拿到 prompt 后缺乏上下文，LLM 自由发挥质量差。
+
+**拍板决策**（龙哥 2026-06-23 确认）：
+- 判断标准 A：content_hint + user_hints + bridge **任一为空** → needs_user_input
+- 3 个选项全保留：用户提供 hint / AI 自行生成 / 跳过节点
+- Phase 1 完成时一次性写入 state（持久化）
+- 允许用户手动覆盖 content_hint
+
+### 代码变更
+
+- **`outline_parser.py`**：
+  - `save_content_hints_to_outline(paper, hints)`：提取的 content_hint 写入 outline_state，跳过特殊 key 和不存在节点
+- **`state_manager_v2.py`**：
+  - `outline_update_status()` 新增 `content_hint` 字段透传参数
+- **`context_builder.py`**：
+  - `build_prompt_package()` 新增 `content_hint` 字段
+  - `build_prompt_package_text()` 新增 `## 开题报告方向参考` section
+- **`orchestrator_v2.py`**：
+  - `check_info_scarcity(paper, node_id)`：3 项数据源检查 + 标准 A 判断
+  - `apply_user_decision(paper, node_id, decision, user_hint)`：3 个决策路径处理
+  - `write_single_node()` Step 1.5：写作前信息检查，需要时返回 `action="needs_user_input"`
+
+### 测试覆盖（8 个测试用例）
+
+- `test_info_scarcity.py`：
+  - save_content_hints 基本写入 + 跳过特殊 key
+  - 3 项全空 → needs_user_input
+  - 部分缺失 → needs_user_input（标准 A）
+  - 3 项齐备 → proceed
+  - 决策 1/2/3 三个路径
+  - 完整端到端闭环
+
+总测试数：25 (v1.7.3) + 20 (v1.7.4) + **8 (v1.7.5) = 53 个**
+
 ## [v1.7.4] - 2026-06-23
 
 ### 增强项1 — 跨父节点 Bridge（章节摘要节点）

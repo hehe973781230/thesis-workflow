@@ -50,6 +50,12 @@ ClawHub 页面：https://clawhub.ai/hehe973781230/thesis-workflow
      → [Phase 5.1 去AI味] → Phase 5.2（Word输出）
 ```
 
+## v1.7.5 新增
+
+- **写作前信息检查**（增强项4）：节点写作前自动检查 3 项信息源（content_hint / user_hints / bridge），任一为空（标准 A）→ 返回 `action="needs_user_input"`，Orchestrator 询问用户 3 个选项：用户提供 hint / AI 自行生成 / 跳过节点
+- **content_hint 完整链路**：`extract_content_hints()` 提取 → `save_content_hints_to_outline()` 写入 state → `build_prompt_package()` 读取并加 `## 开题报告方向参考` section，LLM 基于开题报告写作更精准
+- **单元测试扩充**：增加 8 个测试用例（总 53 个），含完整决策路径 + 端到端闭环
+
 ## v1.7.4 新增
 
 - **跨父节点 Bridge — 章节摘要节点**（增强项1）：解决 `2.1` 找不到 `1.2` key_conclusion 的 bridge 断裂问题。每个 L1 章节末尾自动插入虚拟节点 `__ch{N}_summary__`，吸收本章所有 L2/L3 关键结论，LLM 合成 200-300 字摘要，为下一章节提供承接。

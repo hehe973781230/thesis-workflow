@@ -23,7 +23,7 @@ from context_builder import build_prompt_package_text, build_prompt_package
 from node_writer import write_node_with_llm, extract_key_conclusion
 from reviewer import review_node
 from state_manager_v2 import (
-    outline_load, outline_save, outline_update_status, outline_get_node
+    outline_load, outline_save, outline_update_status, outline_get_node, outline_get_context
 )
 from outline_parser import (
     insert_chapter_summary_nodes,
@@ -245,6 +245,20 @@ def write_single_node(paper_name: str, node_id: str,
         }
 
     prompt_text = write_result.get("prompt", "")
+
+    # Step 1.5 (增强项4): 写作前信息检查
+    scarcity_check = check_info_scarcity(paper_name, node_id)
+    if scarcity_check.get("action") == "needs_user_input":
+        # 贫瘠 → 暂停，返回 needs_user_input
+        return {
+            "ok": True,
+            "action": "needs_user_input",
+            "node_id": node_id,
+            "scarcity_info": scarcity_check,
+            "review_result": None,
+            "chapter_summary": None,
+            "error": ""
+        }
 
     # Step 2: 调用 LLM 生成内容
     system_prompt = (
@@ -699,6 +713,151 @@ def orchestrate(paper_name: str,
 
     else:
         return {"ok": False, "error": f"未知阶段: {phase}"}
+
+
+# ============================================================
+# 写作前信息检查（增强项4）
+# ============================================================
+
+def check_info_scarcity(paper_name: str, node_id: str) -> Dict[str, Any]:
+    """
+    写作前信息贫瘠检查（增强项4）。
+
+    检查 3 项信息源（拍板标准 A）：
+      1. content_hint：开题报告提取或用户手写，存于 node.content_hint
+      2. user_hints：用户自定义分析维度，存于 state.chapter_hints[node_id]
+      3. bridge：prev_sibling_conclusion / parent_conclusion / prev_chapter_summary 任一非空
+
+    拍板标准 A：任一为空 → action="needs_user_input"，全部非空 → action="proceed"。
+
+    返回：
+      {
+        ok: True,
+        action: "proceed" | "needs_user_input",
+        node_id: str,
+        node_title: str,
+        current_info: {
+          content_hint: str,
+          user_hints: list,
+          has_bridge: bool,
+          bridge_source: str | None  # "prev" | "parent" | "chapter_summary"
+        },
+        missing_sources: ["content_hint", ...],  # 仅 needs_user_input 时填充
+        prompt_options: {                        # 仅 needs_user_input 时填充
+          "1": "用户提供 content_hint",
+          "2": "AI 自行生成",
+          "3": "跳过该节点"
+        }
+      }
+    """
+    node = outline_get_node(paper_name, node_id)
+    if not node:
+        return {"ok": False, "action": "proceed", "error": f"节点不存在: {node_id}"}
+
+    state = outline_load(paper_name)
+    if not state:
+        return {"ok": False, "action": "proceed", "error": "目录树未初始化"}
+
+    # 1. content_hint
+    content_hint = (node.get("content_hint") or "").strip()
+
+    # 2. user_hints (chapter_hints)
+    chapter_hints = state.get("chapter_hints", {}) if state else {}
+    user_hints = chapter_hints.get(node_id, [])
+
+    # 3. bridge
+    context = outline_get_context(paper_name, node_id)
+    has_prev = bool(context.get("prev_sibling_conclusion"))
+    has_parent = bool(context.get("parent_conclusion"))
+    has_chapter_summary = bool(
+        context.get("prev_chapter_summary", {}).get("key_conclusion")
+        if context.get("prev_chapter_summary") else False
+    )
+    has_bridge = has_prev or has_parent or has_chapter_summary
+    bridge_source = (
+        "prev" if has_prev else
+        "parent" if has_parent else
+        "chapter_summary" if has_chapter_summary else None
+    )
+
+    current_info = {
+        "content_hint": content_hint,
+        "user_hints": user_hints,
+        "has_bridge": has_bridge,
+        "bridge_source": bridge_source
+    }
+
+    # 标准 A：任一为空 → needs_user_input
+    missing = []
+    if not content_hint:
+        missing.append("content_hint")
+    if not user_hints:
+        missing.append("user_hints")
+    if not has_bridge:
+        missing.append("bridge")
+
+    if missing:
+        return {
+            "ok": True,
+            "action": "needs_user_input",
+            "node_id": node_id,
+            "node_title": node.get("title", ""),
+            "current_info": current_info,
+            "missing_sources": missing,
+            "prompt_options": {
+                "1": "用户提供 content_hint（覆盖写入 node.content_hint）",
+                "2": "AI 自行生成（不补充，直接调用 LLM）",
+                "3": "跳过该节点（记为 failed，后续手动重试）"
+            }
+        }
+
+    return {
+        "ok": True,
+        "action": "proceed",
+        "node_id": node_id,
+        "node_title": node.get("title", ""),
+        "current_info": current_info,
+        "missing_sources": [],
+        "prompt_options": {}
+    }
+
+
+def apply_user_decision(
+    paper_name: str,
+    node_id: str,
+    decision: str,
+    user_hint: str = None
+) -> Dict[str, Any]:
+    """
+    处理 Orchestrator 收到的 user decision（贫瘠节点 3 选项）。
+
+    参数：
+      paper_name: 论文名
+      node_id: 节点 ID
+      decision: "1" (提供 hint) | "2" (AI 自行生成) | "3" (跳过)
+      user_hint: 用户提供的新 content_hint（仅 decision=="1" 时使用）
+
+    返回：
+      {ok: True, action: "proceed" | "skipped" | "error", ...}
+    """
+    if decision == "1":
+        # 用户提供 content_hint → 写入节点 → 继续写作
+        if not user_hint or not user_hint.strip():
+            return {"ok": False, "error": "decision='1' 必须提供 user_hint"}
+        outline_update_status(
+            paper_name, node_id, "pending",
+            content_hint=user_hint.strip()
+        )
+        return {"ok": True, "action": "proceed", "decision": "1"}
+    elif decision == "2":
+        # AI 自行生成：不写入 hint，继续写作
+        return {"ok": True, "action": "proceed", "decision": "2"}
+    elif decision == "3":
+        # 跳过该节点：记为 failed
+        outline_update_status(paper_name, node_id, "failed", retry_count=999)
+        return {"ok": True, "action": "skipped", "decision": "3"}
+    else:
+        return {"ok": False, "error": f"无效 decision: {decision}，必须是 '1'/'2'/'3'"}
 
 
 # ============================================================
