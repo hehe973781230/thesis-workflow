@@ -1,7 +1,7 @@
 ---
-name: thesis-workflow
-version: 2.0.0
-description: "多Agent协作完成MBA/学术论文写作的完整工作流，支持双版本起草、审核、整合、定稿。"
+name: thesis-workflow-v2
+version: 2.0.6
+description: "v2 新框架：多Agent协作完成MBA/学术论文写作的完整工作流。v2 重构为 outline-anchored 设计 + 9 HIL 节点 + 真实 CLI 入口。⚠️ 测试版，需独立安装（不覆盖 v1）。"
 metadata:
   clawdbot:
     emoji: "📝"
