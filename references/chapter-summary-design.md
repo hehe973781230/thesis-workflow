@@ -1,6 +1,6 @@
 # 章节摘要节点设计说明（增强项1 — 跨父节点 Bridge）
 
-> 本文档解释 MBA Thesis Workflow v1.7.4 引入的 **章节摘要节点机制**——为什么要在 L1 章节末尾插入虚拟节点，以及如何利用它解决跨章节 bridge 断裂问题。
+> 本文档解释 MBA Thesis Workflow v2.0.0 引入的 **章节摘要节点机制**——为什么要在 L1 章节末尾插入虚拟节点，以及如何利用它解决跨章节 bridge 断裂问题。
 
 ---
 
@@ -154,7 +154,7 @@ Orchestrator 收到 `action="ask_user"` 时：
 - `test_bridge_p3_fallback.py` (6)：P1/P2 优先级、P3 跨章节、不可用降级、首章节、context 自动附加
 - `test_integration_chapter_summary.py` (2)：happy path + LLM 失败 fallback 端到端
 
-总测试数：25 (v1.7.3) + 20 (v1.7.4) = **45 个**
+总测试数：25 (v1.7.3) + 20 (v1.7.4) = **45 个**（v2.0.0 汇总为 **72 个**）
 
 ---
 

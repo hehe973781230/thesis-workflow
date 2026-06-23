@@ -2,6 +2,119 @@
 
 所有重要更新都会记录在此文件。
 
+## [v2.0.0] - 2026-06-23
+
+### 🎉 大版本升级
+
+v2.0.0 是 outline-anchored 分支的全面合并版，整合了 Step 9-12 的全部能力增强。
+
+### ⚠️ 重大变更（破坏性）
+
+**从 v1.7.3 升级到 v2.0.0 是破坏性升级，请仔细阅读迁移指南。**
+
+#### 1. Phase 1.3 强制流程
+
+v1.7.3 中用户可以直接调用 `confirm_phase1` 进入 Phase 2，开题报告归因是可选的。
+v2.0.0 拍板强制：Phase 1.3 必须上传 docx 或粘贴目录文本，确认归因后才能进 Phase 2。
+
+**迁移代码**（旧调用 → 新调用）：
+```python
+# v1.7.3 旧代码（跳过 Phase 1.3）
+orchestrate(paper, action="phase1_confirm")  # → phase2
+orchestrate(paper, phase="phase2", ...)
+
+# v2.0.0 新代码（必走 Phase 1.3）
+orchestrate(paper, action="phase1_1_init", input_type="docx", input_data=docx_path)
+orchestrate(paper, action="phase1_confirm")
+orchestrate(paper, action="phase1_3_submit")
+orchestrate(paper, action="phase1_3_confirm")
+orchestrate(paper, phase="phase2", ...)
+```
+
+#### 2. outline_state 结构变化
+
+v2.0.0 中每个 L1 章节末尾自动插入虚拟节点 `__ch{N}_summary__`，节点总数 = 原节点 + L1 章节数。
+`state["outline"]["outline_tree"]["metadata"]` 新增 `virtual_nodes` 和 `real_nodes` 字段。
+节点字段新增 `content_hint`（开题报告提取或用户手写）。
+
+#### 3. orchestrate_state 结构变化
+
+新增 5 个 phase1_3_* 字段：
+```json
+{
+  "phase1_3_status": "pending|submitted|confirmed|skipped",
+  "phase1_3_docx_path": null,
+  "phase1_3_result": null,
+  "phase1_3_submitted_at": null,
+  "phase1_3_confirmed_at": null
+}
+```
+
+#### 4. generate_bridge 三级降级链
+
+v1.7.3 仅支持 P1（前序节点）和 P2（父节点）。
+v2.0.0 新增 P3（上一章节虚拟摘要）作为 fallback。
+
+#### 5. 写作前信息检查
+
+v1.7.3 节点写作时仅依赖前置节点的 key_conclusion。
+v2.0.0 引入 `check_info_scarcity()`：content_hint / user_hints / bridge 任一为空 → 返回 `action="needs_user_input"`，Orchestrator 必须处理 3 决策路径。
+
+### 新增能力
+
+- **Step 9** — 跨父节点 Bridge：章节摘要节点 + P3 fallback，跨章节首节点自动引用上一章节摘要
+- **Step 10** — 写作前信息检查：3 项信息源 + 标准 A + 3 决策路径（用户补充 / AI 自行生成 / 跳过）
+- **Step 11** — Orchestrator Phase 1.3 集成：Phase 1.1 docx/text 解析入口 + Phase 1.3 归因状态机
+- **Step 12** — 全链路集成测试：3 个端到端测试覆盖全部组件协同
+
+### 代码变更总览
+
+**新增函数**：
+- `outline_parser.py`：`insert_chapter_summary_nodes()` / `get_chapter_summary_id()` / `get_chapter_id_from_summary()` / `save_content_hints_to_outline()`
+- `orchestrator_v2.py`：`orchestrate_phase1_1()` / `orchestrate_phase1_3()` / `confirm_phase1_3()` / `update_node_content_hint()` / `skip_phase1_3()` / `check_info_scarcity()` / `apply_user_decision()` / `is_last_child_of_chapter()` / `synthesize_chapter_summary()`
+- `state_manager_v2.py`：`_get_prev_chapter_summary()`
+- `context_builder.py`：`_build_bridge_from_chapter_summary()`
+
+**修改函数**：
+- `orchestrator_v2.py`：`init_orchestrate_state()` 新增 phase1_3 字段；`confirm_phase1()` 不再直接进 phase2；`orchestrate_phase2()` 强制检查 phase1_3；`orchestrate()` 入口新增 6 个 actions
+- `state_manager_v2.py`：`outline_update_status()` 新增 content_hint 字段
+- `context_builder.py`：`generate_bridge()` 三级降级链；`build_prompt_package()` 集成 content_hint
+- `write_single_node()` Step 1.5（写作前信息检查）+ Step 4.5（章节摘要触发）
+
+### 测试覆盖
+
+总测试数：**72 个**，全部通过 ✅
+
+| 模块 | 测试数 |
+|------|--------|
+| outline_parser | 6 |
+| context_builder | 7 |
+| node_writer | 全部 |
+| orchestrator | 14 |
+| reviewer | 全部 |
+| Step 9 增强项1（章节摘要） | 14 |
+| Step 10 增强项4（信息检查） | 8 |
+| Step 11 Phase 1.3 集成 | 16 |
+| Step 12 全链路集成 | 3 |
+| 其他既有测试 | 4 |
+
+### 设计文档
+
+新增 `references/chapter-summary-design.md`（178 行）：增强项1 完整设计说明。
+
+### 本地 commit 总状态（feature/outline-anchored 分支）
+
+```
+af66161 feat(step12): full workflow integration test + finalize outline-anchored
+69342ce feat(step11): Orchestrator Phase 1.3 integration (proposal attribution)
+e79f343 feat(step10): enhancement 4 — pre-writing info check + content_hint pipeline
+c2adf09 feat(step9): enhancement 1 — cross-parent bridge via chapter summary nodes
+```
+
+按 MEMORY 规则：不 push 不 publish，等龙哥确认后再推送到 GitHub + ClawHub。
+
+---
+
 ## [v1.7.7] - 2026-06-23
 
 ### Step 12 — 全流程测试 + 提交（outline-anchored 分支完成）

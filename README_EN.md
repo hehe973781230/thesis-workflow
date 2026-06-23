@@ -76,6 +76,27 @@ User → Phase 1 (Confirmation Checklist) → Phase 2 (Dual-Version Drafting) �
 - **LLM Failure Safe Degradation**: `synthesize_chapter_summary()` returns `action="ask_user"` when LLM fails, allowing Orchestrator to collect user-written summaries instead of degrading to error-prone concatenation
 - **Test Suite Expanded**: 20 additional tests (45 total), including full end-to-end integration tests
 
+## v2.0.0 🎉
+
+**BREAKING CHANGES**: Upgrading from v1.7.3 is a breaking change.
+
+- **Mandatory Phase 1.3**: Must upload proposal docx OR paste outline text, confirm attribution before Phase 2
+- **outline_state Structure Change**: Virtual nodes `__ch{N}_summary__` auto-inserted at the end of each L1 chapter; node fields add `content_hint`
+- **orchestrate_state Adds 5 phase1_3_* Fields**: Enum `pending|submitted|confirmed|skipped`
+- **generate_bridge 3-tier Fallback Chain**: P1 previous node → P2 parent node → P3 previous chapter virtual summary (new)
+- **Pre-Writing Info Check**: `check_info_scarcity()` — any of `content_hint` / `user_hints` / `bridge` missing → returns `action="needs_user_input"` + 3 decision paths
+
+**New Capabilities**:
+
+- **Step 9** — Cross-Parent Bridge: chapter summary nodes + P3 fallback
+- **Step 10** — Pre-Writing Info Check: 3 information sources + Standard A + 3 decision paths
+- **Step 11** — Orchestrator Phase 1.3 Integration: docx/text parse entry + attribution state machine
+- **Step 12** — End-to-end Integration Tests
+
+**Migration Guide**: See `CHANGELOG.md` v2.0.0 section.
+
+Total tests: **72**, all passing ✅. See `CHANGELOG.md` for details.
+
 ## v1.7.3 New
 
 - **Orchestrator Auto-Advance**: `scripts/orchestrator.py` decision engine + Review Loop auto-revision

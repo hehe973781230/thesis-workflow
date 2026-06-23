@@ -70,6 +70,27 @@ ClawHub 页面：https://clawhub.ai/hehe973781230/thesis-workflow
 - **LLM 失败安全降级**：`synthesize_chapter_summary()` LLM 调用失败时返回 `action="ask_user"`，Orchestrator 可收集用户手写摘要，不降级拼接错误结论
 - **单元测试扩充**：增加 20 个测试用例（总 45 个），含完整端到端集成测试
 
+## v2.0.0 🎉
+
+**重大变更（破坏性）**：从 v1.7.3 升级是破坏性升级。
+
+- **Phase 1.3 强制流程**：必须上传开题报告 docx 或粘贴目录文本，确认归因后才能进 Phase 2
+- **outline_state 结构变化**：每个 L1 章节末尾自动插入虚拟节点 `__ch{N}_summary__`；节点字段新增 `content_hint`
+- **orchestrate_state 新增 5 个 phase1_3_* 字段**（枚举字段 `pending|submitted|confirmed|skipped`）
+- **generate_bridge 三级降级链**：P1 前序节点 → P2 父节点 → P3 上一章节虚拟摘要（新增）
+- **写作前信息检查**：`check_info_scarcity()`，content_hint / user_hints / bridge 任一为空 → 返回 `action="needs_user_input"` + 3 决策路径
+
+**新增能力**：
+
+- **Step 9** — 跨父节点 Bridge：章节摘要节点 + P3 fallback
+- **Step 10** — 写作前信息检查：3 项信息源 + 标准 A + 3 决策路径
+- **Step 11** — Orchestrator Phase 1.3 集成：docx/text 解析入口 + 归因状态机
+- **Step 12** — 全链路集成测试
+
+**迁移指南**：详见 `CHANGELOG.md` v2.0.0 章节。
+
+总测试数 **72 个**，全部通过 ✅。详见 `CHANGELOG.md`。
+
 ## v1.7.3 新增
 
 - **Orchestrator 自动推进**：`scripts/orchestrator.py` 决策引擎 + 审核 Loop 自动重审
