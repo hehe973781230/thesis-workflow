@@ -4,6 +4,39 @@
 
 适用于开题报告到毕业论文的全流程。
 
+---
+
+## ⚠️ 当前项目双版本并行
+
+本仓库包含 **两条独立版本线**，互不干扰、并行发布：
+
+| 版本线 | ClawHub Slug | 当前 latest | 状态 | 文档 |
+|--------|--------------|-------------|------|------|
+| **v1.x**（稳定） | `thesis-workflow` | **v1.7.3** | 长期维护，仅兼容性修复 | [CHANGELOG-v1.md](./CHANGELOG-v1.md) |
+| **v2.x**（新框架） | `thesis-workflow-v2` | **v2.0.6** | ⚠️ 测试版，独立测试中 | [CHANGELOG-v2.md](./CHANGELOG-v2.md) |
+
+### 选型指南
+
+- **生产环境 / 已有 v1 用户** → `thesis-workflow` (v1.7.3，稳定)
+- **新框架 / outline-anchored / 9 HIL 体验** → `thesis-workflow-v2` (v2.0.6，测试)
+- **同时跑多篇论文** → 两个都装，**可共存**
+
+### 怎么装两个？
+
+```bash
+# v1 稳定版（不依赖本仓库）
+openclaw skills install thesis-workflow
+
+# v2 测试版
+openclaw skills install thesis-workflow-v2
+```
+
+两者安装路径、状态文件、依赖互不冲突。
+
+详见 [`references/git-workflow.md`](./references/git-workflow.md) 和 [CHANGELOG.md](./CHANGELOG.md) 索引。
+
+---
+
 ## 核心功能
 
 - **双版本起草**：版本H（Hermes深度逻辑链）+ 版本O（OpenClaw格式规范）
