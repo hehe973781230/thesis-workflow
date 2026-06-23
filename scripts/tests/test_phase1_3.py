@@ -554,11 +554,25 @@ def test_integration_text_flow():
     r3 = orchestrate_phase1_3(TEST_PAPER)
     assert not r3["ok"], "text 模式 phase1_3 应报错（无 docx）"
 
-    # 用户用 skip_phase1_3 跳过
-    r4 = skip_phase1_3(TEST_PAPER)
+    # v2.0.6 P0-1 修复后：skip_phase1_3 必填 reason + operator
+    # 1) 不传 reason/operator → 报错
+    r4_no_audit = skip_phase1_3(TEST_PAPER)
+    assert not r4_no_audit["ok"], "v2.0.6 修复后 skip 必须 reason+operator"
+
+    # 2) 传 reason + operator → 跳过成功
+    r4 = skip_phase1_3(TEST_PAPER, reason="测试用例：text 模式无 docx", operator="test_phase1_3.py")
+    assert r4["ok"] is True
     assert r4["phase"] == "phase2"
 
-    print(f"   ✅ 端到端 text 流程通过（无 docx 也能进 phase2 via skip）")
+    # 3) 验证 audit log 写入
+    from state_manager_v2 import load_orchestrate_state
+    state_after = load_orchestrate_state(TEST_PAPER)
+    audit_log = state_after.get("audit_log", [])
+    assert len(audit_log) >= 1, "audit log 应有记录"
+    assert audit_log[-1]["action"] == "phase1_3_skip"
+    assert audit_log[-1]["operator"] == "test_phase1_3.py"
+
+    print(f"   ✅ 端到端 text 流程通过（无 docx 也能进 phase2 via skip + audit log）")
 
 
 def main():

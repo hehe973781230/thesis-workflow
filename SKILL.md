@@ -131,44 +131,91 @@ Integrator 汇总 Phase 3 + Phase 3.5 全部评审结果，制定整合方案。
 
 ## Orchestrator 生命周期管理
 
-> 执行脚本：`scripts/orchestrator.py`
-> 配合 OpenClaw cron 实现自动推进
+### 真实入口（v2.0.6 新增）
 
-### 启动方式
-
-用户确认 Phase 1 任务书后，Orchestrator 创建 cron job（每 5 分钟检查一次状态文件）。
+> **执行脚本**：`scripts/run_workflow.py`（v2 真实入口 CLI）
+> **状态文件**：`~/.openclaw/workspace/{paper_name}/_orchestrate_state.json`
+> **设计原则**：驱动状态机 + 9 个 HIL 节点 hard pause
 
 ```bash
-# 手动触发决策（测试用）
-python3 scripts/orchestrator.py 论文_xxx_任务状态.json
+# 仅查看状态
+python3 scripts/run_workflow.py <paper_name> --status
 
-# 决策 + 自动校验
-python3 scripts/orchestrator.py 论文_xxx_任务状态.json --validate
+# auto 模式：根据 state 自动判断下一步
+python3 scripts/run_workflow.py <paper_name> --phase auto
+
+# 指定阶段
+python3 scripts/run_workflow.py <paper_name> --phase phase1
+python3 scripts/run_workflow.py <paper_name> --phase phase2  # 需 --llm
+python3 scripts/run_workflow.py <paper_name> --phase phase3
 ```
 
-### 生命周期
+### Python API（v2.0.6 推荐）
 
+```python
+import sys
+sys.path.insert(0, "scripts")
+from orchestrator_v2 import orchestrate, write_single_node, apply_user_decision
+
+# Phase 1.1: 解析开题报告（docx 或文本）
+r = orchestrate(paper_name, action="phase1_1_init",
+                input_type="docx", input_data="path/to/proposal.docx")
+
+# Phase 1.2: 确认大纲（用户 HIL）
+r = orchestrate(paper_name, action="phase1_confirm")
+
+# Phase 1.3: 提交开题报告归因
+r = orchestrate(paper_name, action="phase1_3_submit",
+                docx_path="path/to/proposal.docx", llm_func=my_llm)
+
+# Phase 1.3: 确认归因（用户 HIL）
+r = orchestrate(paper_name, action="phase1_3_confirm")
+
+# Phase 2: 逐节点写作（v2.0.4 推荐调用模式）
+for node_id in next_nodes:
+    r = write_single_node(paper_name, node_id, llm_func=my_llm,
+                          reviewer_func=my_reviewer)  # 独立评审
+    if r["action"] == "needs_user_input":
+        # HIL #3：info_scarcity 3 决策路径
+        apply_user_decision(paper_name, node_id, "2")  # AI 自行生成
+        r = write_single_node(paper_name, node_id, llm_func=my_llm,
+                              reviewer_func=my_reviewer, bypass_scarcity=True)
+    elif r["action"] == "pending_review":
+        # HIL #4：评审质量 medium/low
+        # 用户决策后重新调
+
+# Phase 3: 整合
+r = orchestrate(paper_name, action="phase3_review")
+# Phase 5: 导出
+r = orchestrate(paper_name, action="phase3_export")
 ```
-用户启动 → 创建 cron（每5分钟检查状态文件）
-             ↓
-    orchestrator.py 读取状态文件 → 决策引擎判断
-    ┌───────────────┬────────────┬───────────────┐
-    ↓               ↓            ↓               ↓
-  执行下一 Phase   HIL 暂停     RETRY 打回      全部完成
-                     ↓            ↓                ↓
-                 发消息等你     Agent 补写      cron 删除自己
-                 回复确认后     → 恢复循环
-                 恢复循环
-```
 
-### HIL 节点（自动暂停，需你确认）
+### HIL 节点（v2.0.6 完整 9 个）
 
-| 节点 | 暂停原因 | 确认后行为 |
-|------|---------|-----------|
-| Phase 1→2 | 公司映射表 + 大纲 | 进入 Phase 2 |
-| Phase 2→2.5 | 章节内容是否预期 | 进入 Phase 3 |
-| Phase 3.5→4 | P0 修复超 3 轮 | 接受/继续修订 |
-| Phase 4→5 | 整合方案是否接受 | 进入终审 |
+| # | 触发位置 | 检查内容 | 决策 |
+|---|---------|---------|------|
+| 1 | Phase 1.1 后 | 大纲结构 | 接受 / 修改 |
+| 2 | Phase 1.3 后 | 归因结果 | 接受 / 调整 hint |
+| 3 | Phase 2 写作前 | info_scarcity | 提供 hint / AI 生成 / 跳过 |
+| 4 | Phase 2 评审后 | quality=medium/low | 接受 / 重写 |
+| 5 | Phase 2 完成后 | 章节内容预览 | 通过 / 修改 |
+| 6 | Phase 3 整合后 | 整合版内容 | 通过 / 修改反馈 |
+| 7 | Phase 3.5 P0 修复 | 超 3 轮未收敛 | 接受 / 继续修订 |
+| 8 | Phase 4 整合方案 | 方案是否接受 | 接受 / 修改 |
+| 9 | Phase 5.2 后 | Word 输出 | 导出 / 修改 |
+
+### v2.0.6 拦截规则（enforcement）
+
+- **拍板 #1 强制**：Phase 1.3 不允许跳过
+  - `orchestrate(action="phase1_3_skip")` → 拦截，返回 `拍板 #1 强制不允许跳过`
+  - `skip_phase1_3()` 函数体加 `MBA_THESIS_PRODUCTION=1` env guard + 必填 `reason`/`operator` + audit log
+- **B-2 幂等保护**：`outline_update_status()` 默认拒绝覆盖已 completed 节点的内容
+  - 需重写请调 `write_single_node(bypass_scarcity=True)` 重走标准流程
+  - 或显式传 `force=True`（调试用）
+- **独立 Reviewer**：`write_single_node()` 接受 `reviewer_func` 参数
+  - 防止生成和评审使用同一 LLM（自我审核）
+  - 默认 reviewer_func == llm_func 时发警告
+  - 调试场景可显式 `allow_self_review=True`
 
 ### 审核 Loop 自动重审
 

@@ -467,16 +467,61 @@ def confirm_phase1_3(paper_name: str) -> Dict[str, Any]:
     }
 
 
-def skip_phase1_3(paper_name: str) -> Dict[str, Any]:
+def skip_phase1_3(paper_name: str, reason: str = None, operator: str = None) -> Dict[str, Any]:
     """
     跳过 Phase 1.3（保留代码路径，拍板 #1 默认禁用）。
 
     ⚠️ 拍板 #1「强制」：默认不允许跳过。
-    本函数仅用于未来放宽策略或调试，生产环境由 orchestrator 入口禁用。
+    本函数仅用于调试或开发场景，必须显式提供 reason 和 operator 才能调用。
+
+    v2.0.6 P0-1 修复：双层保护
+      - 入口层（orchestrate()）已拦截 phase1_3_skip action
+      - 函数层强制检查 reason / operator + 生产环境 env guard
+
+    参数：
+      paper_name: 论文名
+      reason: 跳过原因（必填，audit log）
+      operator: 操作人/agent 标识（必填，audit log）
+
+    返回：
+      成功：{"ok": True, "audit_log": "..."}
+      失败：{"ok": False, "error": "..."}
     """
+    # v2.0.6 P0-1 修复：双层保护第一层 - 生产环境 env guard
+    if os.environ.get("MBA_THESIS_PRODUCTION") == "1":
+        return {
+            "ok": False,
+            "error": "拍板 #1 强制：MBA_THESIS_PRODUCTION=1 模式下禁止跳过 Phase 1.3",
+            "hint": "取消环境变量或使用调试模式"
+        }
+
+    # v2.0.6 P0-1 修复：双层保护第二层 - 必填 reason + operator
+    if not reason or not reason.strip():
+        return {
+            "ok": False,
+            "error": "跳过 Phase 1.3 必须提供 reason 参数（audit 必填）"
+        }
+    if not operator or not operator.strip():
+        return {
+            "ok": False,
+            "error": "跳过 Phase 1.3 必须提供 operator 参数（audit 必填）"
+        }
+
     state = load_orchestrate_state(paper_name)
     if not state:
         return {"ok": False, "error": "状态文件不存在"}
+
+    # v2.0.6 P0-1 修复：audit log
+    audit_entry = {
+        "action": "phase1_3_skip",
+        "paper_name": paper_name,
+        "reason": reason,
+        "operator": operator,
+        "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    }
+    if "audit_log" not in state:
+        state["audit_log"] = []
+    state["audit_log"].append(audit_entry)
 
     state["phase1_3_status"] = "skipped"
     state["phase"] = "phase2"
@@ -533,17 +578,30 @@ def get_next_writing_node(paper_name: str, state: Dict) -> Optional[str]:
 
 def write_single_node(paper_name: str, node_id: str,
                      llm_func: Callable[[str], str],
-                     bypass_scarcity: bool = False) -> Dict[str, Any]:
+                     bypass_scarcity: bool = False,
+                     reviewer_func: Callable[[str], str] = None,
+                     allow_self_review: bool = False) -> Dict[str, Any]:
     """
     执行单个节点的写作 + 评审流程
 
     参数：
       paper_name: 论文名
       node_id: 节点 ID
-      llm_func: LLM 调用函数
+      llm_func: LLM 调用函数（写作）
       bypass_scarcity: 是否跳过 Step 1.5 的 info_scarcity 检查（修复 B-1）
         - True: 跳过 scarcity 检查直接写作（用于 apply_user_decision 之后）
         - False: 默认，按原逻辑检查
+      reviewer_func: 独立评审函数（v2.0.6 P1-2 新增）
+        - None: 默认使用 llm_func（self-review，警告）
+        - callable: 独立 LLM 评审函数
+      allow_self_review: 是否允许 self-review
+        - False: 默认，llm_func == reviewer_func 时警告
+        - True: 调试场景可设为 True
+
+    v2.0.6 P1-2 修复：独立 Reviewer
+      - 防止生成和评审使用同一个 LLM（自我审核）
+      - 默认要求 reviewer_func != llm_func
+      - allow_self_review=True 可调试
 
     返回：
       {
@@ -554,6 +612,26 @@ def write_single_node(paper_name: str, node_id: str,
         error: str
       }
     """
+    # v2.0.6 P1-2 修复：独立 Reviewer 警告
+    if reviewer_func is None:
+        if not allow_self_review:
+            import warnings
+            warnings.warn(
+                f"⚠️ v2.0.6 P1-2: write_single_node({node_id}) 未传 reviewer_func，"
+                f"默认 self-review (llm_func 同时用于生成与评审)。"
+                f"建议传入独立 reviewer_func 或显式 allow_self_review=True。",
+                stacklevel=2
+            )
+        actual_reviewer = llm_func
+    else:
+        if reviewer_func is llm_func and not allow_self_review:
+            import warnings
+            warnings.warn(
+                f"⚠️ v2.0.6 P1-2: write_single_node({node_id}) reviewer_func 与 llm_func 是同一对象，"
+                f"请传独立 reviewer_func。",
+                stacklevel=2
+            )
+        actual_reviewer = reviewer_func
     # Step 1: 构建 prompt 并写作
     from node_writer import write_node
 
@@ -656,7 +734,7 @@ def write_single_node(paper_name: str, node_id: str,
     def mock_llm(prompt: str) -> str:
         return llm_func(prompt)
 
-    review_result = review_node(paper_name, node_id, mock_llm)
+    review_result = review_node(paper_name, node_id, actual_reviewer)
 
     # action 规则：
     # high → 自动完成
@@ -1098,7 +1176,20 @@ def orchestrate(paper_name: str,
         elif action == "phase1_3_confirm":
             return confirm_phase1_3(paper_name)
         elif action == "phase1_3_skip":
-            return skip_phase1_3(paper_name)
+            # v2.0.6 P0-1 修复：拍板 #1 强制拦截
+            # 入口层禁止 phase1_3_skip；如需跳过，必须走 skip_phase1_3() 显式调用并接受审计
+            return {
+                "ok": False,
+                "error": "拍板 #1 强制：Phase 1.3 不允许跳过。"
+                         "请先上传开题报告 docx 或手动录入目录文本（phase1_3_submit）。",
+                "blocked_action": "phase1_3_skip",
+                "required_action": "phase1_3_submit",
+                "retry_options": {
+                    "1": "上传开题报告 docx（action=phase1_3_submit, docx_path=...）",
+                    "2": "手动录入开题报告文本（action=phase1_3_submit, outline_text=...）",
+                    "3": "取消"
+                }
+            }
         else:
             # 默认：Phase 1.2 提示确认
             return orchestrate_phase1(paper_name, **kwargs)

@@ -42,6 +42,83 @@ openclaw skills install thesis-workflow
 
 ClawHub 页面：https://clawhub.ai/hehe973781230/thesis-workflow
 
+### 方式三：v2.0.6 真实入口 CLI
+
+```bash
+# 仅查看状态
+python3 scripts/run_workflow.py <paper_name> --status
+
+# auto 模式
+python3 scripts/run_workflow.py <paper_name>
+
+# Python API
+python3 -c "
+import sys
+sys.path.insert(0, 'scripts')
+from orchestrator_v2 import orchestrate, write_single_node, apply_user_decision
+r = orchestrate('my_paper', action='phase1_1_init',
+                input_type='docx', input_data='proposal.docx')
+print(r)
+"
+```
+
+### v2.0.6 调用示例（完整流程）
+
+```python
+import sys
+sys.path.insert(0, "scripts")
+from orchestrator_v2 import orchestrate, write_single_node, apply_user_decision
+
+# 定义 LLM 函数（示例：OpenAI / OpenClaw session / 本地 mock）
+def my_llm(prompt: str) -> str:
+    # 实际场景：调 OpenAI API / Hermes CLI / subagent
+    return "<generated_content>...</generated_content>"
+
+def my_reviewer(prompt: str) -> str:
+    # v2.0.6 P1-2：独立评审函数（不是 my_llm）
+    return '{"quality": "high", "summary": "...", "weaknesses": [], "suggestions": []}'
+
+# === Phase 1: 规划 ===
+# 1.1 解析开题报告
+r = orchestrate("my_paper", action="phase1_1_init",
+                input_type="docx", input_data="proposal.docx")
+# HIL #1：用户确认大纲
+r = orchestrate("my_paper", action="phase1_confirm")
+
+# 1.3 提交开题报告归因
+r = orchestrate("my_paper", action="phase1_3_submit",
+                docx_path="proposal.docx", llm_func=my_llm)
+# HIL #2：用户确认归因
+r = orchestrate("my_paper", action="phase1_3_confirm")
+
+# === Phase 2: 逐节点写作（v2.0.4 推荐调用模式）===
+import json
+with open("~/.openclaw/workspace/my_paper/_outline_state.json") as f:
+    outline = json.load(f)
+nodes = outline["outline"]["outline_tree"]["nodes"]
+
+for n in nodes:
+    if n.get("is_virtual"):
+        continue  # 跳过虚拟摘要节点
+    r = write_single_node("my_paper", n["id"], llm_func=my_llm,
+                          reviewer_func=my_reviewer)
+    if r["action"] == "needs_user_input":
+        # HIL #3：3 决策路径
+        apply_user_decision("my_paper", n["id"], "2")  # 2=AI 自行生成
+        r = write_single_node("my_paper", n["id"], llm_func=my_llm,
+                              reviewer_func=my_reviewer, bypass_scarcity=True)
+    elif r["action"] == "pending_review":
+        # HIL #4：用户决策
+        pass  # 业务代码处理
+
+# HIL #5：用户确认 Phase 2 完成
+
+# === Phase 3: 整合 + 导出 ===
+r = orchestrate("my_paper", action="phase3_review")  # HIL #6
+r = orchestrate("my_paper", action="phase3_export")   # HIL #9
+print(f"最终论文: {r['output_path']}")
+```
+
 ## 工作流程
 
 ```

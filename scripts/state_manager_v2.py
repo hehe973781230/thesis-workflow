@@ -75,10 +75,15 @@ def outline_update_status(paper_name: str, node_id: str, status: str,
                           retry_count: int = None, key_conclusion: str = None,
                           word_count: int = None,
                           content: str = None,
-                          content_hint: str = None) -> Dict[str, Any]:
+                          content_hint: str = None,
+                          force: bool = False) -> Dict[str, Any]:
     """
     更新节点状态
     支持额外字段更新：content_hint (增强项4 写作前信息检查)
+
+    v2.0.6 P1-1 B-2 修复：幂等检查
+      - 默认拒绝覆盖已完成节点的内容（避免混合用法导致状态污染）
+      - 设 force=True 可强制覆盖（调试用）
     """
     if status not in VALID_STATUSES:
         return {"ok": False, "error": f"无效状态: {status}"}
@@ -92,6 +97,23 @@ def outline_update_status(paper_name: str, node_id: str, status: str,
     node_found = False
     for node in nodes:
         if node["id"] == node_id:
+            # v2.0.6 P1-1 B-2 修复：幂等检查
+            # 已 completed 的节点，非 force 写入 content 时拒绝（避免覆盖）
+            existing_status = node.get("writing_status", "pending")
+            if (not force
+                and existing_status == "completed"
+                and status in ("completed", "writing")
+                and content is not None
+                and node.get("content")):
+                return {
+                    "ok": False,
+                    "error": f"节点 {node_id} 已 completed，"
+                             f"不能覆盖其 content（v2.0.6 B-2 幂等保护）。"
+                             f"如需重写请用 force=True（调试用）或调 "
+                             f"orchestrate_v2.write_single_node() 重走标准流程。",
+                    "current_status": existing_status,
+                    "hint": "建议重走 v2.0.4 推荐路径：write_single_node(bypass_scarcity=True)"
+                }
             node["writing_status"] = status
             if key_conclusion is not None:
                 node["key_conclusion"] = key_conclusion

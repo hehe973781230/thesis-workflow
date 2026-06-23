@@ -2,6 +2,90 @@
 
 所有重要更新都会记录在此文件。
 
+## [v2.0.6] - 2026-06-24
+
+### 🚨 Enforcement 修复 + 真实入口
+
+v2.0.6 是 v2 框架的 **enforcement + entrypoint 重大修复**，由真实使用场景（测试论文_ctx 走 v2 全流程）暴露的问题驱动。
+
+#### 1. 补 v2 真实入口 `scripts/run_workflow.py`（P0-2 + P0-3）
+
+v2.0.0 ~ v2.0.5 期间，v2 框架只有 `orchestrate()` 库函数，**没有 CLI 入口**，SKILL.md / README 承诺的 `python3 scripts/orchestrator.py` 是 v1 入口（接口不兼容）。
+
+v2.0.6 新增 `scripts/run_workflow.py`：
+- CLI + state 文件驱动
+- **9 个 HIL 节点 hard pause**（v2.0.4 修复 HIL 死循环，本次补完整驱动）
+- 走 v2.0.4 推荐调用模式（`write_single_node` + `apply_user_decision` + `bypass_scarcity=True`）
+- 不直接调 `outline_update_status`（避免 B-2 bug）
+
+用法：
+```bash
+python3 scripts/run_workflow.py <paper_name> --status       # 查看状态
+python3 scripts/run_workflow.py <paper_name> --phase auto    # auto
+python3 scripts/run_workflow.py <paper_name> --phase phase1
+```
+
+#### 2. 拦截 `skip_phase1_3` 双层保护（P0-1）
+
+拍板 #1 要求“Phase 1.3 不允许跳过”，v2.0.0 ~ v2.0.5 代码未落实。v2.0.6 修复：
+
+**入口层**：`orchestrate(action="phase1_3_skip")` → 返回 `拍板 #1 强制不允许跳过`
+
+**函数层**：`skip_phase1_3()` 加 3 道防线
+- `MBA_THESIS_PRODUCTION=1` 环境变量禁止跳过
+- 必填 `reason` 参数（audit log）
+- 必填 `operator` 参数（audit log）
+
+audit log 写入 `state.audit_log`，含 action / paper_name / reason / operator / timestamp。
+
+#### 3. B-2 bug 幂等修复（P1-1）
+
+`outline_update_status()` 默认拒绝覆盖已 `completed` 节点的内容，避免驱动直接调用导致状态污染。
+
+- 默认：返回 `v2.0.6 B-2 幂等保护` 错误，提示重走 `write_single_node(bypass_scarcity=True)` 路径
+- `force=True`：允许覆盖（调试用）
+
+昨天 CHANGELOG 记录“决策不修”，本版本重新评估后修正为“必修”。
+
+#### 4. 独立 Reviewer（P1-2）
+
+`write_single_node()` 加 `reviewer_func` 参数，默认要求评审函数与写作函数不同（防止自审 = 不审）。
+
+- 不传 `reviewer_func` → 发 `UserWarning`（默认 self-review）
+- `reviewer_func is llm_func` → 发 `UserWarning`（未独立）
+- `allow_self_review=True` 可调试场景
+
+#### 5. 文档补充
+
+- `SKILL.md` 新增「真实入口（v2.0.6 新增）」章节，含 9 个 HIL 节点清单 + Python API 示例
+- `README.md` 新增「方式三：v2.0.6 真实入口 CLI」 + 「v2.0.6 调用示例（完整流程）」
+
+#### 6. 回归测试
+
+`scripts/tests/test_run_workflow.py`（v2.0.6 新增）：14 个测试用例
+- 拦截层：5 个（跳 phase1_3 拦截、reason/operator 必填、env guard、audit log）
+- CLI 层：2 个（--help、--status）
+- B-2 幂等层：3 个（拒绝覆盖、force 覆盖、writing 允许）
+- 独立 Reviewer 层：3 个（不传警告、同函数警告、独立无警告）
+- 端到端：1 个（v2.0.4 推荐调用模式）
+
+#### 7. 修改的现有测试
+
+`scripts/tests/test_phase1_3.py::test_integration_text_flow`：
+- v2.0.6 修复后 `skip_phase1_3()` 必填 reason + operator
+- 测试更新为验证三步：报错 → 传审计参数成功 → audit log 验证
+
+### 测试统计
+
+- 修复前：158 个测试通过
+- 修复后：**172 个测试通过**（+14 个 v2.0.6 新增），0 个失败（1 个预存在的 test_continue_decision bug 未修）
+
+## [v2.0.5] - 2026-06-24 (昨日)
+
+### 🐛 B-2 状态同步修复（orchestrate state 函数迁移 + outline_update_status 同步）
+
+（略，v2.0.5 commit `686acca`）
+
 ## [v2.0.1] - 2026-06-23
 
 ### 🐛 补丁修复
