@@ -605,14 +605,23 @@ def get_next_writing_node(paper_name: str, state: Dict) -> Optional[str]:
 
 
 def write_single_node(paper_name: str, node_id: str,
-                     llm_func: Callable[[str], str]) -> Dict[str, Any]:
+                     llm_func: Callable[[str], str],
+                     bypass_scarcity: bool = False) -> Dict[str, Any]:
     """
     执行单个节点的写作 + 评审流程
+
+    参数：
+      paper_name: 论文名
+      node_id: 节点 ID
+      llm_func: LLM 调用函数
+      bypass_scarcity: 是否跳过 Step 1.5 的 info_scarcity 检查（修复 B-1）
+        - True: 跳过 scarcity 检查直接写作（用于 apply_user_decision 之后）
+        - False: 默认，按原逻辑检查
 
     返回：
       {
         ok: bool,
-        action: "completed" | "pending_review" | "error",
+        action: "completed" | "pending_review" | "needs_user_input" | "error",
         node_id: str,
         review_result: dict | None,
         error: str
@@ -634,8 +643,9 @@ def write_single_node(paper_name: str, node_id: str,
     prompt_text = write_result.get("prompt", "")
 
     # Step 1.5 (增强项4): 写作前信息检查
+    # 修复 B-1：bypass_scarcity=True 时跳过检查（Orchestrator 已决策的路径）
     scarcity_check = check_info_scarcity(paper_name, node_id)
-    if scarcity_check.get("action") == "needs_user_input":
+    if not bypass_scarcity and scarcity_check.get("action") == "needs_user_input":
         # 贫瘠 → 暂停，返回 needs_user_input
         return {
             "ok": True,
@@ -803,6 +813,19 @@ def orchestrate_phase2(paper_name: str,
 
     if not result["ok"]:
         return result
+
+    # 修复 B-1：needs_user_input action 必须单独处理（不进 pending_review）
+    if result["action"] == "needs_user_input":
+        # HIL 路径：不修改任何 state，直接返回给 Orchestrator 上层决策
+        # 调用方需调 apply_user_decision + write_single_node(bypass_scarcity=True) 继续
+        return {
+            "ok": True,
+            "action": "needs_user_input",
+            "node_id": next_node,
+            "scarcity_info": result.get("scarcity_info", {}),
+            "progress": state["progress"],
+            "message": f"节点 {next_node} 信息贫瘠，需要用户决策（决策 1=提供 hint, 2=AI 自行生成, 3=跳过）"
+        }
 
     # 更新 state
     state["current_node_id"] = next_node
