@@ -129,11 +129,15 @@ def outline_update_status(paper_name: str, node_id: str, status: str,
         pass
     
     state["updated_at"] = datetime.now().isoformat()
-    
+
     state_path = _get_state_path(paper_name)
     with open(state_path, 'w', encoding='utf-8') as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
-    
+
+    # 修复 B-2：同步 orchestrate state.completed_nodes / failed_nodes
+    # 避免外调 outline_update_status 时 orchestrate state 不同步
+    sync_orchestrate_state_from_outline(paper_name, node_id, status)
+
     return {"ok": True, "status": status, "node_id": node_id}
 
 
@@ -364,6 +368,129 @@ def outline_delete(paper_name: str) -> Dict[str, Any]:
         os.remove(state_path)
         return {"ok": True}
     return {"ok": False, "error": "状态文件不存在"}
+
+
+# ============================================================
+# Orchestrate 状态管理（迁移自 orchestrator_v2.py，修复 B-2）
+# ============================================================
+
+def _get_orchestrate_state_path(paper_name: str) -> str:
+    """获取编排状态文件路径"""
+    return os.path.join(_get_paper_dir(paper_name), "_orchestrate_state.json")
+
+
+def load_orchestrate_state(paper_name: str) -> Optional[Dict[str, Any]]:
+    """加载编排状态"""
+    path = _get_orchestrate_state_path(paper_name)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def save_orchestrate_state(paper_name: str, state: Dict[str, Any]) -> bool:
+    """保存编排状态"""
+    path = _get_orchestrate_state_path(paper_name)
+    try:
+        state["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def init_orchestrate_state(paper_name: str) -> Dict[str, Any]:
+    """初始化编排状态"""
+    outline_state = outline_load(paper_name)
+    if not outline_state:
+        raise ValueError(f"论文 {paper_name} 的目录树未初始化")
+
+    nodes = outline_state["outline"]["outline_tree"]["nodes"]
+    total = len(nodes)
+
+    state = {
+        "paper_name": paper_name,
+        "phase": "phase1",
+        "current_node_id": None,
+        "completed_nodes": [],
+        "pending_review": [],     # 待用户确认（medium/low）
+        "failed_nodes": [],       # 用户选择跳过的节点
+        "phase1_confirmed": False,
+        "phase1_3_status": "pending",   # 增强项4/Step 11: pending|submitted|confirmed|skipped
+        "phase1_3_docx_path": None,     # 上传的开题报告路径
+        "phase1_3_result": None,        # 归因详细结果（细粒度）
+        "phase1_3_submitted_at": None,  # submit 时间戳
+        "phase1_3_confirmed_at": None,  # confirm 时间戳
+        "progress": {
+            "total": total,
+            "completed": 0,
+            "pending": 0,
+            "failed": 0
+        },
+        "last_updated": datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    }
+    save_orchestrate_state(paper_name, state)
+    return state
+
+
+def update_progress(state: Dict[str, Any]) -> Dict[str, Any]:
+    """更新进度统计"""
+    total = state["progress"]["total"]
+    completed = len(state["completed_nodes"])
+    pending = len(state["pending_review"])
+    failed = len(state["failed_nodes"])
+
+    state["progress"] = {
+        "total": total,
+        "completed": completed,
+        "pending": pending,
+        "failed": failed
+    }
+    return state
+
+
+def sync_orchestrate_state_from_outline(paper_name: str, node_id: str, status: str) -> None:
+    """修复 B-2：同步 orchestrate state 的 completed_nodes / failed_nodes 列表
+
+    当 outline_update_status() 被调用且状态是 completed/failed 时，
+    同步更新 orchestrate state 的列表，避免混合用法下已完成节点被重复处理。
+
+    仅同步 completed / failed，其他状态（writing / pending / approved）不动。
+    如果 orchestrate state 文件不存在（未初始化），则跳过。
+    """
+    try:
+        orchestrate_state = load_orchestrate_state(paper_name)
+        if not orchestrate_state:
+            return  # orchestrate state 未初始化，跳过
+
+        completed = orchestrate_state.setdefault("completed_nodes", [])
+        failed = orchestrate_state.setdefault("failed_nodes", [])
+
+        if status == "completed":
+            if node_id not in completed:
+                completed.append(node_id)
+            # 从 failed 移除（如果之前 failed 过）
+            if node_id in failed:
+                failed.remove(node_id)
+        elif status == "failed":
+            if node_id not in failed:
+                failed.append(node_id)
+            # 从 completed 移除（如果之前 completed 过）
+            if node_id in completed:
+                completed.remove(node_id)
+        # 其他状态（writing / pending / approved）暂不同步
+
+        # 同时刷新 progress 计数（避免列表与计数不同步）
+        update_progress(orchestrate_state)
+
+        save_orchestrate_state(paper_name, orchestrate_state)
+    except Exception:
+        # 任何异常都不影响主流程（outline state 已写入）
+        pass
 
 
 if __name__ == "__main__":

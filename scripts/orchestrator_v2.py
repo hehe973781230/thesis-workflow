@@ -37,90 +37,17 @@ from outline_parser import (
 
 
 # ============================================================
-# 状态管理
+# 状态管理（Orchestrate state 函数已迁移至 state_manager_v2.py，修复 B-2）
 # ============================================================
 
-def _get_orchestrate_state_path(paper_name: str) -> str:
-    """获取编排状态文件路径"""
-    # 复用 state_manager_v2 的路径逻辑
-    from state_manager_v2 import _get_paper_dir
-    return os.path.join(_get_paper_dir(paper_name), "_orchestrate_state.json")
-
-
-def load_orchestrate_state(paper_name: str) -> Optional[Dict]:
-    """加载编排状态"""
-    path = _get_orchestrate_state_path(paper_name)
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return None
-
-
-def save_orchestrate_state(paper_name: str, state: Dict) -> bool:
-    """保存编排状态"""
-    path = _get_orchestrate_state_path(paper_name)
-    try:
-        state["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception:
-        return False
-
-
-def init_orchestrate_state(paper_name: str) -> Dict:
-    """
-    初始化编排状态
-    """
-    outline_state = outline_load(paper_name)
-    if not outline_state:
-        raise ValueError(f"论文 {paper_name} 的目录树未初始化")
-
-    nodes = outline_state["outline"]["outline_tree"]["nodes"]
-    total = len(nodes)
-
-    state = {
-        "paper_name": paper_name,
-        "phase": "phase1",
-        "current_node_id": None,
-        "completed_nodes": [],
-        "pending_review": [],     # 待用户确认（medium/low）
-        "failed_nodes": [],       # 用户选择跳过的节点
-        "phase1_confirmed": False,
-        "phase1_3_status": "pending",   # 增强项4/Step 11: pending|submitted|confirmed|skipped
-        "phase1_3_docx_path": None,     # 上传的开题报告路径
-        "phase1_3_result": None,        # 归因详细结果（细粒度）
-        "phase1_3_submitted_at": None,  # submit 时间戳
-        "phase1_3_confirmed_at": None,  # confirm 时间戳
-        "progress": {
-            "total": total,
-            "completed": 0,
-            "pending": 0,
-            "failed": 0
-        },
-        "last_updated": datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
-    }
-    save_orchestrate_state(paper_name, state)
-    return state
-
-
-def update_progress(state: Dict) -> Dict:
-    """更新进度统计"""
-    total = state["progress"]["total"]
-    completed = len(state["completed_nodes"])
-    pending = len(state["pending_review"])
-    failed = len(state["failed_nodes"])
-
-    state["progress"] = {
-        "total": total,
-        "completed": completed,
-        "pending": pending,
-        "failed": failed
-    }
-    return state
+# 直接从 state_manager_v2 导入（避免重复定义和循环依赖）
+from state_manager_v2 import (
+    _get_orchestrate_state_path,
+    load_orchestrate_state,
+    save_orchestrate_state,
+    init_orchestrate_state,
+    update_progress,
+)
 
 
 # ============================================================
