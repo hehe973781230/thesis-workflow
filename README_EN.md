@@ -56,6 +56,13 @@ User → Phase 1 (Confirmation Checklist) → Phase 2 (Dual-Version Drafting) �
      → Phase 5 (Finalization) → [Phase 5.1 (Optional AI Removal)] → Phase 5.2 (Word Generation)
 ```
 
+## v1.7.4 New
+
+- **Cross-Parent Bridge — Chapter Summary Nodes (Enhancement 1)**: Solves the bridge breakage where `2.1` cannot find `1.2`'s `key_conclusion`. Each L1 chapter automatically gets a virtual `__ch{N}_summary__` node appended, which absorbs all L2/L3 key conclusions and synthesizes a 200-300 word summary via LLM, providing coherence for the next chapter's bridge.
+- **Three-tier Bridge Priority**: `generate_bridge()` now has P3 fallback chain: P1 previous node → P2 parent node → P3 previous chapter virtual summary
+- **LLM Failure Safe Degradation**: `synthesize_chapter_summary()` returns `action="ask_user"` when LLM fails, allowing Orchestrator to collect user-written summaries instead of degrading to error-prone concatenation
+- **Test Suite Expanded**: 20 additional tests (45 total), including full end-to-end integration tests
+
 ## v1.7.3 New
 
 - **Orchestrator Auto-Advance**: `scripts/orchestrator.py` decision engine + Review Loop auto-revision

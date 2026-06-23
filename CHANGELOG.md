@@ -2,6 +2,47 @@
 
 所有重要更新都会记录在此文件。
 
+## [v1.7.4] - 2026-06-23
+
+### 增强项1 — 跨父节点 Bridge（章节摘要节点）
+
+**问题**：`2.1` 找不到 `1.2` 的 `key_conclusion`，bridge 断裂 → NodeWriter 拿不到承接段。
+
+**方案 C**：在每个 L1 章节末尾插入虚拟章节摘要节点 `__ch{N}_summary__`，吸收本章所有 L2/L3 子节点的 `key_conclusion`，为下一章节 bridge 提供承接依据。
+
+### 代码变更
+
+- **`outline_parser.py`**（新增 3 函数）：
+  - `insert_chapter_summary_nodes(outline)`：在每个 L1 章节末尾插入虚拟节点（幂等）
+  - `get_chapter_summary_id(chapter_id)`：`ch1` → `__ch1_summary__`
+  - `get_chapter_id_from_summary(summary_id)`：`__ch1_summary__` → `ch1`
+- **`orchestrator_v2.py`**（新增 3 函数 + 修改 1 函数）：
+  - `is_last_child_of_chapter(paper, node_id)`：判断节点是否是所属章节最后一个完成的子节点
+  - `synthesize_chapter_summary(paper, chapter_id, llm_func, user_input=None)`：LLM 合成 200-300 字章节摘要，写入虚拟节点
+  - `_build_summary_prompt(chapter_title, child_conclusions, user_input)`：合成 prompt
+  - `write_single_node()` Step 4.5：节点完成回调中自动检测并触发章节摘要合成
+- **`context_builder.py`**（新增 1 函数 + 修改 1 函数）：
+  - `_build_bridge_from_chapter_summary(prev_chapter_summary, current)`：P3 fallback 跨章节桥接
+  - `generate_bridge()`：新增 P3 优先级（P1 prev → P2 parent → P3 prev_chapter_summary）
+- **`state_manager_v2.py`**（新增 1 函数 + 修改 1 函数）：
+  - `_get_prev_chapter_summary(node, nodes, node_map)`：查上一章节虚拟摘要
+  - `outline_get_context()`：自动附加 `prev_chapter_summary` 字段
+
+### 测试覆盖（20 个测试用例）
+
+- `test_chapter_summary.py`：单/多章节插入、L3 纳入 synthesizes、幂等性、边界、辅助函数（6 个）
+- `test_synthesize_summary.py`：last_child 检测、LLM 路径、用户输入路径、LLM 失败 ask_user、空子节点、超长截断（6 个）
+- `test_bridge_p3_fallback.py`：P1/P2 优先级、P3 跨章节桥接、不可用降级、首章节、context 自动附加（6 个）
+- `test_integration_chapter_summary.py`：happy path + LLM 失败 fallback 端到端（2 个）
+
+### 拍板决策（龙哥 2026-06-23 确认）
+
+1. ✅ 方案 C（虚拟摘要节点）
+2. ✅ 200-300 字够了
+3. ✅ **LLM 失败时询问用户**（不是简单拼接）
+4. ✅ 章节摘要不参与 Phase 3 评审（仅作内部辅助 bridge）
+5. ✅ 在 `references/` 增加设计文档
+
 ## [v1.7.3] - 2026-06-19
 
 ### P0 修复

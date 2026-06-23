@@ -50,6 +50,13 @@ ClawHub 页面：https://clawhub.ai/hehe973781230/thesis-workflow
      → [Phase 5.1 去AI味] → Phase 5.2（Word输出）
 ```
 
+## v1.7.4 新增
+
+- **跨父节点 Bridge — 章节摘要节点**（增强项1）：解决 `2.1` 找不到 `1.2` key_conclusion 的 bridge 断裂问题。每个 L1 章节末尾自动插入虚拟节点 `__ch{N}_summary__`，吸收本章所有 L2/L3 关键结论，LLM 合成 200-300 字摘要，为下一章节提供承接。
+- **三级 Bridge 优先级**：`generate_bridge()` 新增 P3 fallback 链：P1 前序节点 → P2 父节点 → P3 上一章节虚拟摘要
+- **LLM 失败安全降级**：`synthesize_chapter_summary()` LLM 调用失败时返回 `action="ask_user"`，Orchestrator 可收集用户手写摘要，不降级拼接错误结论
+- **单元测试扩充**：增加 20 个测试用例（总 45 个），含完整端到端集成测试
+
 ## v1.7.3 新增
 
 - **Orchestrator 自动推进**：`scripts/orchestrator.py` 决策引擎 + 审核 Loop 自动重审

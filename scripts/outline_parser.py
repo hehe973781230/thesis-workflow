@@ -860,6 +860,152 @@ def extract_content_hints(
     return content_hints
 
 
+# ============================================================
+# 章节摘要节点插入（增强项1 — 跨父节点 Bridge）
+# ============================================================
+
+def insert_chapter_summary_nodes(outline: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    在每个 L1 章节末尾插入虚拟章节摘要节点 __ch{N}_summary__
+
+    设计目的（增强项1 跨父节点 Bridge）：
+      - 解决 "2.1 找不到 1.2 key_conclusion" 的 bridge 断裂问题
+      - 每个章节末尾自动生成虚拟摘要节点
+      - 该节点吸收本章所有 L2/L3 的 key_conclusion
+      - 下一章节的 bridge 可引用前一章节的摘要节点（P3 fallback）
+
+    输入: build_outline_tree() 返回的 outline 对象
+    输出: 插入了虚拟节点的新 outline 对象（不修改原节点）
+
+    节点结构:
+      {
+        "id": "__ch{N}_summary__",
+        "level": 1,
+        "title": "{章节标题} - 本章小结",
+        "is_virtual": True,
+        "type": "chapter_summary",
+        "synthesizes": ["1.1", "1.2", "1.3"],   # 待汇总的子节点 ID
+        "chapter_id": "ch1",
+        "chapter_title": "绪论",
+        "key_conclusion": None,   # 由 synthesize_chapter_summary() 填充
+        "writing_status": "pending"
+      }
+
+    注意:
+      - 虚拟节点不参与 prev/next sibling 关系（仍标记 None）
+      - 虚拟节点的 writing_status 始终为 pending（不会被 NodeWriter 写作）
+      - 已包含虚拟节点时直接跳过（幂等）
+    """
+    if not outline or "outline_tree" not in outline:
+        return outline
+
+    nodes = outline["outline_tree"].get("nodes", [])
+    if not nodes:
+        return outline
+
+    # 幂等检查：若已存在虚拟节点，跳过
+    if any(n.get("is_virtual") for n in nodes):
+        return outline
+
+    # 按 L1 章节分组（保留原始顺序）
+    chapters = []  # [{"id": ..., "title": ..., "nodes": [...]}]
+    current_ch = None
+
+    for node in nodes:
+        if node["level"] == 1 and not node.get("is_virtual"):
+            # 新章节开始
+            if current_ch is not None:
+                chapters.append(current_ch)
+            current_ch = {
+                "id": node["id"],
+                "title": node["title"],
+                "nodes": [node]
+            }
+        elif current_ch is not None:
+            current_ch["nodes"].append(node)
+
+    # 收尾最后一章
+    if current_ch is not None:
+        chapters.append(current_ch)
+
+    # 生成新 nodes 列表：原节点 + 末尾虚拟摘要节点
+    new_nodes = []
+    for ch in chapters:
+        # 添加章节所有原始节点
+        new_nodes.extend(ch["nodes"])
+
+        # 获取该章节的子节点 ID（L2/L3）
+        child_ids = [
+            n["id"] for n in ch["nodes"]
+            if n.get("level") in [2, 3] and not n.get("is_virtual")
+        ]
+
+        # 章节序号（ch1 -> 1, ch2 -> 2...）
+        ch_id_raw = ch["id"]
+        if ch_id_raw.startswith("ch"):
+            ch_num = ch_id_raw[2:]
+        else:
+            ch_num = ch_id_raw
+
+        # 虚拟摘要节点
+        summary_node = {
+            "id": f"__ch{ch_num}_summary__",
+            "level": 1,
+            "num": None,
+            "title": f"{ch['title']} — 本章小结",
+            "parent_id": None,
+            "children_ids": [],
+            "prev_sibling_id": None,
+            "next_sibling_id": None,
+            "writing_status": "pending",
+            "key_conclusion": None,
+            "word_count": None,
+            "is_virtual": True,
+            "type": "chapter_summary",
+            "synthesizes": child_ids,
+            "chapter_id": ch["id"],
+            "chapter_title": ch["title"]
+        }
+        new_nodes.append(summary_node)
+
+    # 更新 outline
+    outline["outline_tree"]["nodes"] = new_nodes
+    metadata = outline["outline_tree"].get("metadata", {})
+    metadata["total_nodes"] = len(new_nodes)
+    metadata["virtual_nodes"] = sum(1 for n in new_nodes if n.get("is_virtual"))
+    metadata["real_nodes"] = sum(1 for n in new_nodes if not n.get("is_virtual"))
+    outline["outline_tree"]["metadata"] = metadata
+
+    return outline
+
+
+def get_chapter_summary_id(chapter_id: str) -> str:
+    """
+    根据 L1 章节 ID 生成虚拟摘要节点 ID
+    例如: ch1 -> __ch1_summary__, ch5 -> __ch5_summary__
+    """
+    if chapter_id.startswith("ch"):
+        ch_num = chapter_id[2:]
+    else:
+        ch_num = chapter_id
+    return f"__ch{ch_num}_summary__"
+
+
+def get_chapter_id_from_summary(summary_node_id: str) -> Optional[str]:
+    """
+    根据虚拟摘要节点 ID 反查章节 ID
+    例如: __ch1_summary__ -> ch1
+    """
+    if not summary_node_id or not isinstance(summary_node_id, str):
+        return None
+    if not summary_node_id.startswith("__ch") or not summary_node_id.endswith("_summary__"):
+        return None
+    middle = summary_node_id[4:-10]  # 去掉前缀 __ch 和后缀 _summary__
+    if not middle or not middle.isdigit():
+        return None
+    return f"ch{middle}"
+
+
 if __name__ == "__main__":
     import sys
 

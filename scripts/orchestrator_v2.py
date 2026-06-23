@@ -25,6 +25,11 @@ from reviewer import review_node
 from state_manager_v2 import (
     outline_load, outline_save, outline_update_status, outline_get_node
 )
+from outline_parser import (
+    insert_chapter_summary_nodes,
+    get_chapter_summary_id,
+    get_chapter_id_from_summary,
+)
 
 
 # ============================================================
@@ -289,6 +294,21 @@ def write_single_node(paper_name: str, node_id: str,
         word_count=word_count
     )
 
+    # Step 4.5: 增强项1 — 触发章节摘要合成（如适用）
+    chapter_summary_result = None
+    try:
+        chapter_id = is_last_child_of_chapter(paper_name, node_id)
+        if chapter_id:
+            chapter_summary_result = synthesize_chapter_summary(
+                paper_name, chapter_id, llm_func
+            )
+    except Exception as e:
+        chapter_summary_result = {
+            "ok": False,
+            "action": "ask_user",
+            "error": f"章节摘要合成异常: {str(e)}"
+        }
+
     # Step 5: 评审
     # 先获取带 content 的节点（评审需要读取 content）
     node = outline_get_node(paper_name, node_id)
@@ -311,6 +331,7 @@ def write_single_node(paper_name: str, node_id: str,
         "action": action,
         "node_id": node_id,
         "review_result": review_result,
+        "chapter_summary": chapter_summary_result,
         "error": ""
     }
 
@@ -678,3 +699,218 @@ def orchestrate(paper_name: str,
 
     else:
         return {"ok": False, "error": f"未知阶段: {phase}"}
+
+
+# ============================================================
+# 章节摘要合成（增强项1 — 跨父节点 Bridge）
+# ============================================================
+
+def is_last_child_of_chapter(paper_name: str, node_id: str) -> Optional[str]:
+    """
+    判断 node_id 是否是其所属 L1 章节最后一个已完成的 L2/L3 子节点。
+
+    返回：
+      - 章节 ID（如 "ch1"）如果是最后一个 → 触发摘要合成
+      - None 如果不是
+
+    实现：直接读 outline_state，定位章节 synthesizes 列表，检查是否全部 completed。
+    """
+    state = outline_load(paper_name)
+    if not state:
+        return None
+
+    nodes = state["outline"]["outline_tree"]["nodes"]
+    node_map = {n["id"]: n for n in nodes}
+
+    target = node_map.get(node_id)
+    if not target or target.get("is_virtual"):
+        return None
+
+    # 递归查 L1 父章节
+    chapter_id = None
+    cur = target
+    while cur and cur.get("level", 0) > 1:
+        parent_id = cur.get("parent_id")
+        if not parent_id:
+            return None
+        cur = node_map.get(parent_id)
+        if not cur:
+            return None
+        if cur.get("level") == 1 and not cur.get("is_virtual"):
+            chapter_id = cur["id"]
+            break
+
+    if not chapter_id:
+        return None
+
+    # 查该章节的虚拟摘要节点
+    summary_id = get_chapter_summary_id(chapter_id)
+    summary_node = node_map.get(summary_id)
+    if not summary_node:
+        return None
+
+    synthesizes = summary_node.get("synthesizes", [])
+    if not synthesizes:
+        return None
+
+    # 检查 synthesizes 列表是否全部 completed
+    all_done = True
+    for sid in synthesizes:
+        s = node_map.get(sid)
+        if not s:
+            continue
+        if s.get("writing_status") != "completed":
+            all_done = False
+            break
+
+    return chapter_id if all_done else None
+
+
+def _build_summary_prompt(chapter_title: str, child_conclusions: List[Dict[str, str]],
+                         user_input: str = None) -> str:
+    """
+    构建 LLM 合成章节摘要的 prompt
+
+    参数：
+      chapter_title: 章节标题（如"外部环境分析"）
+      child_conclusions: [{"id": "3.1", "title": "...", "key_conclusion": "..."}, ...]
+      user_input: 用户在 Phase 1.3 填的"本章核心问题"（可选补充）
+    """
+    child_text = "\n".join([
+        f"- [{c['id']}] {c['title']}：{c['key_conclusion']}"
+        for c in child_conclusions
+    ])
+
+    user_supplement = f"\n\n用户补充视角（本章核心问题）：\n{user_input}" if user_input else ""
+
+    return f"""你是一位专业的 MBA 学术论文写作者。
+
+任务：将以下章节的子节点关键结论合成为本章摘要。
+
+章节标题：{chapter_title}
+
+子节点关键结论：
+{child_text}
+{user_supplement}
+
+要求：
+1. 提炼本章核心发现与逻辑主线（不要罗列子节点）
+2. 为下一章节提供承接基础
+3. 字数严格控制在 200-300 字之间，不要超过 300
+4. 输出格式：只输出摘要正文，不要任何标题或前缀
+
+摘要正文："""
+
+
+def synthesize_chapter_summary(
+    paper_name: str,
+    chapter_id: str,
+    llm_func: Callable[[str], str],
+    user_input: str = None
+) -> Dict[str, Any]:
+    """
+    合成章节摘要。
+
+    触发时机（自动）：章节最后一个 L2/L3 子节点写作完成时，由 write_single_node() 回调调用。
+    失败处理（拍板要求 #3）：LLM 失败 → 返回 action="ask_user"，由 Orchestrator 询问用户。
+
+    参数：
+      paper_name: 论文名
+      chapter_id: 章节 ID（如 "ch1"）
+      llm_func: LLM 调用函数
+      user_input: 用户在 Phase 1.3 填的"本章核心问题"（可选）
+
+    返回：
+      {
+        ok: bool,
+        action: "completed" | "ask_user",   # ask_user 时调用方应询问用户
+        summary: str | None,                 # 摘要内容（成功时）
+        source: "llm" | "user" | None,      # 摘要来源
+        error: str,
+        chapter_id: str,
+        child_conclusions: list              # ask_user 时附带给 Orchestrator
+      }
+    """
+    state = outline_load(paper_name)
+    if not state:
+        return {"ok": False, "action": "ask_user", "error": "目录树未初始化"}
+
+    nodes = state["outline"]["outline_tree"]["nodes"]
+    node_map = {n["id"]: n for n in nodes}
+
+    summary_id = get_chapter_summary_id(chapter_id)
+    summary_node = node_map.get(summary_id)
+    if not summary_node:
+        return {"ok": False, "action": "ask_user", "error": f"未找到虚拟摘要节点: {summary_id}"}
+
+    # 收集子节点结论
+    child_conclusions = []
+    for cid in summary_node.get("synthesizes", []):
+        c = node_map.get(cid)
+        if c and c.get("key_conclusion"):
+            child_conclusions.append({
+                "id": cid,
+                "title": c.get("title", ""),
+                "key_conclusion": c["key_conclusion"]
+            })
+
+    if not child_conclusions:
+        return {
+            "ok": False,
+            "action": "ask_user",
+            "error": "该章节无可用子节点结论",
+            "chapter_id": chapter_id,
+            "child_conclusions": []
+        }
+
+    summary_text = None
+    source = None
+
+    # 路径 1：用户提供摘要
+    if user_input:
+        summary_text = user_input.strip()
+        source = "user"
+
+    # 路径 2：LLM 合成
+    if not summary_text:
+        prompt = _build_summary_prompt(
+            chapter_title=summary_node.get("chapter_title", chapter_id),
+            child_conclusions=child_conclusions,
+            user_input=user_input
+        )
+        try:
+            response_text = llm_func(prompt)
+            summary_text = response_text.strip()
+            source = "llm"
+        except Exception as e:
+            # LLM 失败 → 拍板要求 #3：询问用户
+            return {
+                "ok": False,
+                "action": "ask_user",
+                "error": f"LLM 调用失败: {str(e)}",
+                "chapter_id": chapter_id,
+                "chapter_title": summary_node.get("chapter_title", chapter_id),
+                "child_conclusions": child_conclusions
+            }
+
+    # 路径 3：超长截断到 300 字以内（保底）
+    if summary_text and len(summary_text) > 300:
+        summary_text = summary_text[:300]
+
+    # 写入虚拟节点
+    outline_update_status(
+        paper_name, summary_id, "completed",
+        key_conclusion=summary_text,
+        word_count=len(summary_text) if summary_text else 0
+    )
+
+    return {
+        "ok": True,
+        "action": "completed",
+        "summary": summary_text,
+        "source": source,
+        "error": "",
+        "chapter_id": chapter_id,
+        "node_id": summary_id
+    }
+

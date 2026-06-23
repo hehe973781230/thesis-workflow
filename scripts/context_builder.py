@@ -158,31 +158,70 @@ def _build_bridge_from_parent(parent: Dict, current: Dict, parent_conclusion: st
     )
 
 
+def _build_bridge_from_chapter_summary(prev_chapter_summary: Dict, current: Dict) -> str:
+    """
+    增强项1 P3 fallback：跨章节承接段生成
+
+    当 P1（前序节点）和 P2（父节点）都拿不到 key_conclusion 时（如 2.1 是新章节首节点，
+    前序 1.2 既不是 prev 也不是 parent），使用上一章节虚拟摘要节点作为承接依据。
+
+    参数：
+      prev_chapter_summary: {
+        "chapter_id": "ch1",
+        "chapter_title": "绪论",
+        "key_conclusion": "本章系统梳理了..."  # 200-300 字摘要
+      }
+      current: 当前节点
+    """
+    summary_text = prev_chapter_summary.get("key_conclusion", "")
+    if not summary_text:
+        return None
+
+    summary = _truncate(summary_text, 120)
+    chapter_title = prev_chapter_summary.get("chapter_title", "上一章节")
+    return (
+        f"在「{chapter_title}」中，{summary}，"
+        f"本章将在此基础上展开分析「{current.get('title', '本节')}」的具体内容。"
+    )
+
+
 def generate_bridge(context: Dict[str, Any]) -> Optional[str]:
     """
     根据前序节点的 key_conclusion 实际内容，生成承接段
     严格串行：前置节点未完成（无 key_conclusion）时返回 null
+
+    优先级链（增强项1 P3 fallback）：
+      P1: prev_node key_conclusion  → 同章节前序节点
+      P2: parent_node key_conclusion → 父节点
+      P3: prev_chapter_summary      → 上一章节虚拟摘要节点（跨章节首节点场景）
     """
     current = context.get("current_node", {})
     prev = context.get("prev_node")
     parent = context.get("parent_node")
-    
-    # 无前序节点
-    if not prev and not parent:
+    prev_chapter_summary = context.get("prev_chapter_summary")
+
+    # 无任何上游上下文
+    if not prev and not parent and not prev_chapter_summary:
         return None
-    
-    # 尝试从 prev 获取 key_conclusion
+
+    # P1: prev key_conclusion
     if prev:
         prev_conclusion = prev.get("key_conclusion")
         if prev_conclusion:
             return _build_bridge_from_prev(prev, current, prev_conclusion)
-    
-    # 尝试从 parent 获取 key_conclusion
+
+    # P2: parent key_conclusion
     if parent:
         parent_conclusion = parent.get("key_conclusion")
         if parent_conclusion:
             return _build_bridge_from_parent(parent, current, parent_conclusion)
-    
+
+    # P3 (增强项1): prev_chapter_summary
+    if prev_chapter_summary:
+        result = _build_bridge_from_chapter_summary(prev_chapter_summary, current)
+        if result:
+            return result
+
     # 前置节点未完成，无 key_conclusion，返回 null 让 NodeWriter 自行处理开头
     return None
 

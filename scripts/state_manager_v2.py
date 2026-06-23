@@ -182,7 +182,10 @@ def outline_get_context(paper_name: str, node_id: str) -> Optional[Dict[str, Any
         if idx < len(sibling_ids) - 1:
             next_id = sibling_ids[idx + 1]
             next_node = node_map.get(next_id)
-    
+
+    # 增强项1 P3 fallback：上一章节虚拟摘要节点
+    prev_chapter_summary = _get_prev_chapter_summary(node, nodes, node_map)
+
     context = {
         "current_node": node,
         "prev_node": {
@@ -203,10 +206,76 @@ def outline_get_context(paper_name: str, node_id: str) -> Optional[Dict[str, Any
         } if next_node else None,
         "parent_conclusion": parent_node.get("key_conclusion") if parent_node else None,
         "prev_sibling_conclusion": prev_node.get("key_conclusion") if prev_node else None,
-        "next_node_title": next_node["title"] if next_node else None
+        "next_node_title": next_node["title"] if next_node else None,
+        "prev_chapter_summary": prev_chapter_summary
     }
-    
+
     return context
+
+
+def _get_prev_chapter_summary(node: Dict, nodes: List[Dict], node_map: Dict) -> Optional[Dict]:
+    """
+    增强项1：获取上一章节的虚拟摘要节点（用于跨章节 bridge P3 fallback）。
+
+    返回：
+      {
+        "chapter_id": "ch1",
+        "chapter_title": "绪论",
+        "key_conclusion": "本章系统..."  # 200-300 字
+      }
+      或 None（首章节 / 无虚拟摘要节点）
+
+    逻辑：
+      - 查上一章节虚拟摘要节点 __ch{N-1}_summary__
+      - 需 key_conclusion 已存在才返回（否则起不到承接作用）
+    """
+    if not node or node.get("level") != 2:
+        # 只在 L2 节点上需要跨章节承接
+        # L1 是章节概述节点，L3 子节点的父节点始终是 L2
+        return None
+
+    # 查本节点所属 L1 章节
+    chapter_id = None
+    cur = node
+    while cur and cur.get("level", 0) > 1:
+        parent_id = cur.get("parent_id")
+        if not parent_id:
+            return None
+        cur = node_map.get(parent_id)
+        if not cur:
+            return None
+        if cur.get("level") == 1 and not cur.get("is_virtual"):
+            chapter_id = cur["id"]
+            break
+
+    if not chapter_id or not chapter_id.startswith("ch"):
+        return None
+
+    # 推算上一章节 ID（ch1 -> chN-1）
+    try:
+        ch_num = int(chapter_id[2:])
+    except ValueError:
+        return None
+
+    if ch_num <= 1:
+        return None  # 首章节无前一章节
+
+    prev_chapter_id = f"ch{ch_num - 1}"
+    prev_summary_id = f"__ch{ch_num - 1}_summary__"
+
+    prev_summary_node = node_map.get(prev_summary_id)
+    if not prev_summary_node:
+        return None
+
+    summary = prev_summary_node.get("key_conclusion")
+    if not summary:
+        return None  # 未合成则不起作用，返回 None
+
+    return {
+        "chapter_id": prev_chapter_id,
+        "chapter_title": prev_summary_node.get("chapter_title", prev_chapter_id),
+        "key_conclusion": summary
+    }
 
 
 def outline_get_next_node(paper_name: str) -> Optional[Dict[str, Any]]:
