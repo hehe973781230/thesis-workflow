@@ -2,6 +2,49 @@
 
 所有重要更新都会记录在此文件。
 
+## [v1.7.7] - 2026-06-23
+
+### Step 12 — 全流程测试 + 提交（outline-anchored 分支完成）
+
+**目的**：验证 Step 1-11 全部组件跨 Phase 端到端协同工作，为后续 push + publish 做准备。
+
+### 新增
+
+- **`scripts/tests/test_full_workflow.py`**（3 个集成测试）：
+  - 测试 A：完整 docx 流程（Phase 1.1 → 1.2 → 1.3 → 用户调整 → 1.3 确认 → 章节摘要合成）
+  - 测试 B：失败回退流程（解析失败 3 次 → 重试成功 → Phase 2）
+  - 测试 C：增强项1 + 增强项4 + Step 11 协同（章节摘要 + bridge 跨章节）
+
+### 修订
+
+- **`scripts/state_manager_v2.py`**：`_get_prev_chapter_summary()` 触发条件从「level == 2」改为「prev_sibling_id == None」（章节首节点）。修复了 L3 首节点无法触发跨章节 bridge P3 fallback 的问题。
+
+### 测试总览
+
+总测试数：**72 个**（25 + 20 + 8 + 16 + 3），全部通过 ✅
+
+| 模块 | 测试数 |
+|------|--------|
+| outline_parser | 6 |
+| context_builder | 全部 |
+| node_writer | 全部 |
+| orchestrator | 14 |
+| reviewer | 全部 |
+| **Step 9 增强项1（章节摘要）** | 14 |
+| **Step 10 增强项4（信息检查）** | 8 |
+| **Step 11 Phase 1.3 集成** | 16 |
+| **Step 12 全链路集成** | 3 |
+
+### 本地分支总状态（feature/outline-anchored）
+
+```
+69342ce feat(step11): Orchestrator Phase 1.3 integration (proposal attribution)
+e79f343 feat(step10): enhancement 4 — pre-writing info check + content_hint pipeline
+c2adf09 feat(step9): enhancement 1 — cross-parent bridge via chapter summary nodes
+```
+
+按 MEMORY 规则：不 push 不 publish，等龙哥确认后再推送到 GitHub + ClawHub。
+
 ## [v1.7.6] - 2026-06-23
 
 ### Step 11 — Orchestrator Phase 1.3 集成（开题报告归因子阶段）

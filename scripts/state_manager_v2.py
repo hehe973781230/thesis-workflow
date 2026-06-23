@@ -227,18 +227,14 @@ def _get_prev_chapter_summary(node: Dict, nodes: List[Dict], node_map: Dict) -> 
         "chapter_title": "绪论",
         "key_conclusion": "本章系统..."  # 200-300 字
       }
-      或 None（首章节 / 无虚拟摘要节点）
+      或 None（首章节 / 无虚拟摘要节点 / 不是章节首节点）
 
-    逻辑：
-      - 查上一章节虚拟摘要节点 __ch{N-1}_summary__
-      - 需 key_conclusion 已存在才返回（否则起不到承接作用）
+    触发条件（Step 12 修订）：当前节点是某章节首节点（prev_sibling_id == None）
     """
-    if not node or node.get("level") != 2:
-        # 只在 L2 节点上需要跨章节承接
-        # L1 是章节概述节点，L3 子节点的父节点始终是 L2
+    if not node or node.get("is_virtual"):
         return None
 
-    # 查本节点所属 L1 章节
+    # 查本节点所属 L1 章节（递归向上走 L2/L3）
     chapter_id = None
     cur = node
     while cur and cur.get("level", 0) > 1:
@@ -253,6 +249,10 @@ def _get_prev_chapter_summary(node: Dict, nodes: List[Dict], node_map: Dict) -> 
             break
 
     if not chapter_id or not chapter_id.startswith("ch"):
+        return None
+
+    # 仅当当前节点是章节首节点（prev_sibling_id == None）才查上一章节摘要
+    if node.get("prev_sibling_id") is not None:
         return None
 
     # 推算上一章节 ID（ch1 -> chN-1）
