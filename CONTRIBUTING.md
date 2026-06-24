@@ -5,13 +5,14 @@
 ## 📑 目录
 
 1. [当前项目状态](#当前项目状态)
-2. [分支管理](#分支管理)
-3. [命名规范](#命名规范)
-4. [提交规范](#提交规范)
-5. [测试要求](#测试要求)
-6. [发布流程](#发布流程)
-7. [CHANGELOG 维护](#changelog-维护)
-8. [禁止事项](#禁止事项)
+2. [v2 不是 v1 的小升级，是重新设计](#-v2-不是-v1-的小升级是重新设计)
+3. [分支管理](#分支管理)
+4. [命名规范](#命名规范)
+5. [提交规范](#提交规范)
+6. [测试要求](#测试要求)
+7. [发布流程](#发布流程)
+8. [CHANGELOG 维护](#changelog-维护)
+9. [禁止事项](#禁止事项)
 
 ---
 
@@ -29,6 +30,75 @@
 | 已有 v1 用户 / 生产环境 | v1.7.3（稳定）|
 | 新功能 / outline-anchored / 9 HIL 体验 | v2.0.6（测试）|
 | 同时跑多篇论文 | 两个都装，可共存 |
+
+---
+
+## ⚠️ v2 不是 v1 的小升级，是重新设计
+
+**贡献者请务必理解**：v2 框架（outline-anchored）和 v1 框架（双版本）是**不同的设计哲学**，不是 v1 的"feature 增删"。
+
+### v1 核心设计（已被 v2 取代）
+
+```
+Phase 1（规划）→ Phase 2（双版本起草）→ Phase 2.5（用户确认）
+→ Phase 3（双版本审核）→ Phase 3.5（深度评审）→ Phase 4（整合）→ Phase 5（终审）
+→ [Phase 5.1 去AI味] → Phase 5.2（Word 输出）
+```
+
+**双版本分工**：
+- 版本H（Hermes深度逻辑链）：`hermes chat` 生成长篇深度内容
+- 版本O（OpenClaw格式规范）：`sessions_spawn` subagent 生成格式严谨内容
+- 同一章节生成 2 份完整内容，用户/Integrator 选择/整合
+
+### v2 核心设计（当前主线）
+
+```
+Phase 1（规划）→ Phase 1.3（开题报告归因）→ Phase 2（逐节点写作）
+→ Phase 3（整合）→ Phase 5（导出）
+```
+
+**outline-anchored + 9 HIL + 单内容生成**：
+- 每个节点 1 次 LLM 调用 → 1 份 content + 1 个 key_conclusion
+- outline 锚定 + bridge 上下文衔接（保障不离题 + 衔接自然）
+- reviewer.py 评审 quality=high/medium/low
+- 9 个 HIL hard pause（强人工/Agent 介入）
+
+### 关键差异对比
+
+| 维度 | v1 双版本 | v2 outline-anchored |
+|------|----------|---------------------|
+| **核心机制** | 同章 2 版本对比 | outline 锚定 + 评审驱动 |
+| **Phase 2 输出** | 2 份完整内容（H+O）| 1 份 content + key_conclusion |
+| **LLM 调用次数** | 每章 2 次（+ 整合）| 每节点 1 次 |
+| **质量保障** | H/O 对比 + 整合方案 | reviewer 评审 + bridge 上下文 |
+| **HIL 节点数** | 4 个 | **9 个**（v2.0.6 强化） |
+| **章节承接** | 整合阶段拼接 | bridge_paragraph + 虚拟摘要节点 |
+| **LLM 注入** | hardcode hermes / sessions_spawn | **llm_func callable**（任意注入）|
+| **跳过 Phase 1.3** | ✅ 允许（debug 入口）| ❌ 拦截（v2.0.6 拍板 #1 强制）|
+| **B-2 幂等保护** | ❌ 无 | ✅ v2.0.6 新增（防止覆盖）|
+| **独立 Reviewer** | ❌ 自审 | ✅ reviewer_func 参数（防自审）|
+
+### 为什么 v2 重构？
+
+1. **简化流程**：双版本成本高，v2 走单内容 + 评审，质量等价
+2. **强人/Agent 介入**：v2 的 9 HIL 比 v1 的 4 HIL 更频繁，让用户/Agent 主动控制
+3. **标准化 LLM 接入**：v2 的 llm_func callable 让任意 LLM 实现都可注入，v1 强绑 hermes + OpenClaw
+4. **outline 锚定**：v2 把"如何写"分解成 outline 节点级，强结构化
+5. **可扩展性**：v2 的 outline_parser + state_manager_v2 是独立模块，便于二次开发
+
+### v1 → v2 不是无缝迁移
+
+| 不兼容点 | 说明 |
+|---------|------|
+| `scripts/orchestrator.py` (v1) | 与 `scripts/orchestrator_v2.py` 接口完全不同 |
+| State 文件 | 字段不同（v2 加了 audit_log, content_hint 等）|
+| HIL 数量 | 4 → 9，交互点更多 |
+| 状态机驱动 | v1 是 cron + 状态文件；v2 是显式 `orchestrate()` 调用 |
+| skip_phase1_3 | v1 debug 允许；v2 拦截（强制 reason + operator + audit）|
+
+**迁移建议**：
+- 不要直接把 v1 论文 state 跑 v2（不兼容）
+- 用 v1 跑完后，导出 md → 人工复审 → 用 v2 重新生成（如有需要）
 
 ---
 
