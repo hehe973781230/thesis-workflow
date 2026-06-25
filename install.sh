@@ -73,6 +73,14 @@ else
     python3 -m pip install --user python-docx
 fi
 
+# sentence-transformers（可选，加速 Phase 1.3 归因）
+if python3 -c "import sentence_transformers" 2>/dev/null; then
+    echo "✅ sentence-transformers 已安装"
+else
+    echo "⚠️ sentence-transformers 未安装（可选依赖，Phase 1.3 归因降级为 LLM 方案，不影响核心流程）"
+    echo "   安装：python3 -m pip install --user 'sentence-transformers~=5.1'"
+fi
+
 # OpenClaw
 if command -v openclaw &>/dev/null; then
     echo "✅ OpenClaw 已安装"

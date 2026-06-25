@@ -31,12 +31,20 @@ _fallback_used = False
 # ============================================================
 try:
     from simple_embedder import TitleMatcher
-    VECTOR_MATCHER_AVAILABLE = TitleMatcher.is_available()
-    # 覆盖 is_available 结果（首次导入时已加载模型）
+    _VECTOR_MATCHER_IMPORTED = True
 except ImportError:
-    VECTOR_MATCHER_AVAILABLE = False
+    _VECTOR_MATCHER_IMPORTED = False
 except Exception:
-    VECTOR_MATCHER_AVAILABLE = False
+    _VECTOR_MATCHER_IMPORTED = False
+
+def vector_matcher_available() -> bool:
+    """惰性检查向量匹配器是否可用。首次调用时加载模型，后续缓存结果。"""
+    if not _VECTOR_MATCHER_IMPORTED:
+        return False
+    try:
+        return TitleMatcher.is_available()
+    except Exception:
+        return False
 
 
 def reset_fallback_state():
@@ -959,7 +967,7 @@ def extract_proposal_content(
 
     if unmatched_headings:
         # ── 2a: 向量标题匹配（确定性 + 毫秒级，v2.0.9 新增）────
-        if VECTOR_MATCHER_AVAILABLE:
+        if vector_matcher_available():
             heading_texts = [info["text"] for info in unmatched_headings]
             try:
                 matches = TitleMatcher.match_headings(

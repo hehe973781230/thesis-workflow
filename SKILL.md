@@ -178,7 +178,7 @@ python3 scripts/run_workflow.py <paper_name> --phase phase2  # 需 --llm
 python3 scripts/run_workflow.py <paper_name> --phase phase3
 ```
 
-### Python API（v2.0.6 推荐）
+### Python API（v2.0.9）
 
 ```python
 import sys
@@ -203,19 +203,16 @@ r = orchestrate(paper_name, action="phase1_3_confirm")
 for node_id in next_nodes:
     r = write_single_node(paper_name, node_id, llm_func=my_llm,
                           reviewer_func=my_reviewer)  # 独立评审
-    if r["action"] == "needs_user_input":
-        # HIL #3：info_scarcity 3 决策路径
-        apply_user_decision(paper_name, node_id, "2")  # AI 自行生成
-        r = write_single_node(paper_name, node_id, llm_func=my_llm,
-                              reviewer_func=my_reviewer, bypass_scarcity=True)
-    elif r["action"] == "pending_review":
-        # HIL #4：评审质量 medium/low
-        # 用户决策后重新调
 
 # Phase 3: 整合
 r = orchestrate(paper_name, action="phase3_review")
-# Phase 5: 导出
-r = orchestrate(paper_name, action="phase3_export")
+
+# Phase 3.5: 深度学术评审（自动进入 Phase 3.5/4/5 链）
+# Phase 3 → orchestrate_phase3_5() → P0修复 → Phase 4 → Phase 5
+r = orchestrate(paper_name, phase="phase3", action="phase3_export")
+
+# Phase 5: Word 输出提示
+print(r.get("message", ""))
 ```
 
 ### HIL 节点（v2.0.6 完整 9 个）

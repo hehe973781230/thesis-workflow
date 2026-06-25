@@ -1090,6 +1090,370 @@ def confirm_phase3_and_export(paper_name: str) -> Dict[str, Any]:
 
 
 # ============================================================
+# Phase 3.5：深度学术评审
+# ============================================================
+# 对 Phase 3 整合版做二次审查，输出 P0/P1/P2 分级问题清单
+# ============================================================
+
+def orchestrate_phase3_5(paper_name: str,
+                         llm_func: Optional[Callable[[str], str]] = None) -> Dict[str, Any]:
+    """
+    Phase 3.5：深度学术评审（固定节点，不可跳过）
+
+    输入：Phase 3 整合版论文
+    输出：P0/P1/P2 分级问题清单
+
+    后续：有 P0 → 自动进入修订 → 回到 Phase 3.5 重审
+          无 P0 → 进入 Phase 4
+          连续 2 轮无新 P0 → 通过
+          超 3 轮 → HIL 暂停
+    """
+    state = load_orchestrate_state(paper_name)
+    if not state:
+        return {"ok": False, "error": "状态文件不存在"}
+
+    # 获取 Phase 3 整合版内容
+    outline_state = outline_load(paper_name)
+    if not outline_state:
+        return {"ok": False, "error": "目录树未初始化"}
+
+    nodes = outline_state["outline"]["outline_tree"]["nodes"]
+    completed_ids = set(state["completed_nodes"])
+
+    sections = []
+    for node in nodes:
+        if node["id"] in completed_ids or node["id"] in state.get("failed_nodes", []):
+            node_data = outline_get_node(paper_name, node["id"])
+            content = node_data.get("content", "") if node_data else ""
+            if content:
+                title = node.get("title", node["id"])
+                sections.append(f"## {title}\n\n{content}")
+
+    full_content = "\n\n".join(sections)
+
+    # 调用 LLM 做深度评审（或 sessions_spawn subagent）
+    if llm_func:
+        prompt = f"""你是一位学术论文评审专家。请对以下论文进行深度学术评审。
+
+评审维度：
+1. 理论框架是否完整、逻辑一致
+2. 论证链是否严密，有无跳跃或断层
+3. 数据/引用支撑是否充分
+4. 结论是否与前面的分析一致对应
+5. 章节之间逻辑衔接是否顺畅
+6. 学术规范（引用格式、术语一致性）
+
+请按以下分级输出问题清单：
+- P0（阻塞性）：必须修复的问题（论证错误、数据明显偏差、逻辑断裂）
+- P1（重要）：建议修复（引用不充分、表述不清晰、结构可优化）
+- P2（轻微）：可选项（格式微调、措辞润色）
+
+论文内容：
+---
+{full_content[:8000]}
+---
+（全文共 {len(full_content)} 字，以上为节选前 8000 字）
+
+以 JSON 格式输出：
+{{
+  "p0": [{{"node_id": "...", "issue": "...", "severity": "p0"}}],
+  "p1": [...],
+  "p2": [...],
+  "summary": "总体评价（50字以内）"
+}}
+只输出 JSON。"""
+
+        try:
+            response = llm_func(prompt)
+            import json, re
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                review_result = json.loads(json_match.group(0))
+            else:
+                review_result = {"p0": [], "p1": [], "p2": [], "summary": "解析失败，请重试"}
+        except Exception as e:
+            review_result = {"p0": [], "p1": [], "p2": [], "summary": f"评审异常: {e}"}
+    else:
+        review_result = {"p0": [], "p1": [], "p2": [], "summary": "未提供 llm_func，跳过深度评审"}
+
+    # 更新状态
+    p0_count = len(review_result.get("p0", []))
+    p1_count = len(review_result.get("p1", []))
+    p2_count = len(review_result.get("p2", []))
+    review_round = state.get("phase3_5_round", 0) + 1
+
+    state["phase"] = "phase3.5"
+    state["phase3_5_round"] = review_round
+    state["phase3_5_result"] = review_result
+    state["phase3_5_status"] = "pending_review"
+
+    # 连续2轮无新P0检测
+    prev_p0_ids = set(
+        item.get("issue", "") for item in state.get("phase3_5_prev_result", {}).get("p0", [])
+    )
+    curr_p0_ids = set(item.get("issue", "") for item in review_result.get("p0", []))
+    new_p0 = curr_p0_ids - prev_p0_ids
+
+    if p0_count == 0 or not new_p0:
+        # 无 P0 或 P0 没有新增 → HIL 接受
+        state["phase3_5_status"] = "passed"
+        state["phase3_5_consecutive_clean"] = state.get("phase3_5_consecutive_clean", 0) + 1
+    else:
+        state["phase3_5_consecutive_clean"] = 0
+
+    # 记录本次结果供下次对比
+    state["phase3_5_prev_result"] = review_result
+
+    # HIL #7：超 3 轮未收敛
+    needs_hil = review_round > 3 and p0_count > 0
+
+    save_orchestrate_state(paper_name, state)
+
+    return {
+        "ok": True,
+        "phase": "phase3.5",
+        "review_round": review_round,
+        "p0": review_result.get("p0", []),
+        "p1": review_result.get("p1", []),
+        "p2": review_result.get("p2", []),
+        "p0_count": p0_count,
+        "p1_count": p1_count,
+        "p2_count": p2_count,
+        "new_p0_count": len(new_p0),
+        "consecutive_clean": state.get("phase3_5_consecutive_clean", 0),
+        "summary": review_result.get("summary", ""),
+        "needs_hil": needs_hil,
+        "status": state["phase3_5_status"],
+        "message": f"深度评审第 {review_round} 轮：P0={p0_count}, P1={p1_count}, P2={p2_count}" + \
+                   ("，已达到通过标准" if state["phase3_5_status"] == "passed" else "") + \
+                   ("，超过3轮未收敛，需要您决策" if needs_hil else ""),
+    }
+
+
+def auto_fix_p0_issues(paper_name: str,
+                       llm_func: Callable[[str], str]) -> Dict[str, Any]:
+    """
+    Phase 3.5 → Phase 4 自动衔接：修复 P0 问题
+
+    读取 phase3_5_result 中的 P0 问题，逐个调用 LLM 修复。
+    """
+    state = load_orchestrate_state(paper_name)
+    if not state:
+        return {"ok": False, "error": "状态文件不存在"}
+
+    review_result = state.get("phase3_5_result", {})
+    p0_issues = review_result.get("p0", [])
+
+    if not p0_issues:
+        return {"ok": True, "fixed": 0, "message": "无 P0 问题需要修复"}
+
+    fixed = 0
+    for issue in p0_issues:
+        node_id = issue.get("node_id", "")
+        issue_text = issue.get("issue", "")
+        if not node_id or not issue_text:
+            continue
+
+        node = outline_get_node(paper_name, node_id)
+        if not node:
+            continue
+
+        current_content = node.get("content", "")
+        if not current_content:
+            continue
+
+        prompt = f"""请修复以下问题：
+节点：{node.get('title', node_id)}
+问题：{issue_text}
+
+当前内容：
+---
+{current_content}
+---
+
+请输出修复后的完整内容。
+"""
+
+        try:
+            new_content = llm_func(prompt)
+            import re
+            new_content = re.sub(r'<key_conclusion>.*?</key_conclusion>', '', new_content, flags=re.DOTALL).strip()
+            outline_update_status(paper_name, node_id, "completed", content=new_content)
+            fixed += 1
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "fixed": fixed,
+        "total": len(p0_issues),
+        "message": f"已修复 {fixed}/{len(p0_issues)} 个 P0 问题"
+    }
+
+
+# ============================================================
+# Phase 4：整合 + 终审
+# ============================================================
+
+def orchestrate_phase4(paper_name: str,
+                       llm_func: Optional[Callable[[str], str]] = None) -> Dict[str, Any]:
+    """
+    Phase 4：整合 P0/P1 修复 + 终审
+
+    流程：
+      1. 自动修复 P0 问题
+      2. 建议修复 P1 问题（询问用户）
+      3. 重新整合论文
+      4. 输出最终版
+    """
+    state = load_orchestrate_state(paper_name)
+    if not state:
+        return {"ok": False, "error": "状态文件不存在"}
+
+    review_result = state.get("phase3_5_result", {})
+    p0 = review_result.get("p0", [])
+    p1 = review_result.get("p1", [])
+
+    # 自动修复 P0
+    fix_result = {"fixed_p0": 0, "fixed_p1": 0}
+    if p0 and llm_func:
+        from context_builder import build_prompt_package, build_prompt_package_text
+        fixed = 0
+        for issue in p0:
+            node_id = issue.get("node_id", "")
+            issue_text = issue.get("issue", "")
+            if not node_id or not issue_text:
+                continue
+            node = outline_get_node(paper_name, node_id)
+            if not node or not node.get("content"):
+                continue
+            prompt = f"""修复节点「{node.get('title', node_id)}」的以下问题：
+{issue_text}
+
+当前内容：
+---
+{node['content']}
+---
+
+输出修复后的完整内容。"""
+            try:
+                new_c = llm_func(prompt)
+                import re
+                new_c = re.sub(r'<key_conclusion>.*?</key_conclusion>', '', new_c, flags=re.DOTALL).strip()
+                outline_update_status(paper_name, node_id, "completed", content=new_c)
+                fixed += 1
+            except Exception:
+                pass
+        fix_result["fixed_p0"] = fixed
+
+    # 重新整合论文
+    outline_state = outline_load(paper_name)
+    nodes = outline_state["outline"]["outline_tree"]["nodes"]
+    completed_ids = set(state["completed_nodes"])
+
+    sections = []
+    for node in nodes:
+        if node["id"] in completed_ids or node["id"] in state.get("failed_nodes", []):
+            node_data = outline_get_node(paper_name, node["id"])
+            content = node_data.get("content", "") if node_data else ""
+            if content:
+                sections.append(f"## {node.get('title', node['id'])}\n\n{content}")
+
+    full_content = "\n\n".join(sections)
+
+    state["phase"] = "phase4"
+    state["phase4_status"] = "completed"
+    save_orchestrate_state(paper_name, state)
+
+    return {
+        "ok": True,
+        "phase": "phase4",
+        "fixed_p0": fix_result["fixed_p0"],
+        "pending_p1": len(p1),
+        "word_count": len(full_content),
+        "message": f"Phase 4 整合完成：已修复 {fix_result['fixed_p0']} 个 P0 问题，还有 {len(p1)} 个 P1 建议"
+    }
+
+
+# ============================================================
+# Phase 5：终审 + Word 输出
+# ============================================================
+
+def orchestrate_phase5(paper_name: str) -> Dict[str, Any]:
+    """
+    Phase 5：终审 + Word 输出
+
+    流程：
+      1. 运行 loop_self_check.py 做 Guardrails 校验
+      2. 输出最终 Markdown 文件
+      3. 提示用户可运行 md2docx_strict.py 转 Word
+    """
+    state = load_orchestrate_state(paper_name)
+    if not state:
+        return {"ok": False, "error": "状态文件不存在"}
+
+    # 运行 Guardrails 校验
+    guardrails_result = {}
+    try:
+        import subprocess
+        import json as _json
+        result = subprocess.run(
+            [sys.executable, "scripts/loop_self_check.py", "--file", f"papers/{paper_name}_final.md", "--json"],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0:
+            guardrails_result = _json.loads(result.stdout) if result.stdout else {"pass": True}
+        else:
+            guardrails_result = {"pass": False, "error": result.stderr[:200]}
+    except Exception as e:
+        guardrails_result = {"pass": False, "error": str(e)}
+
+    # 整合最终版
+    outline_state = outline_load(paper_name)
+    nodes = outline_state["outline"]["outline_tree"]["nodes"]
+    completed_ids = set(state["completed_nodes"])
+
+    sections = []
+    for node in nodes:
+        if node["id"] in completed_ids or node["id"] in state.get("failed_nodes", []):
+            node_data = outline_get_node(paper_name, node["id"])
+            content = node_data.get("content", "") if node_data else ""
+            if content:
+                sections.append(f"## {node.get('title', node['id'])}\n\n{content}")
+
+    full_content = "\n\n".join(sections)
+
+    # 保存最终 Markdown
+    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "papers")
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, f"{paper_name}_final.md")
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(full_content)
+
+    state["phase"] = "phase5"
+    state["phase5_status"] = "exported"
+    state["phase5_guardrails"] = guardrails_result
+    state["phase5_output_path"] = output_path
+    save_orchestrate_state(paper_name, state)
+
+    msg = f"论文已导出至 {output_path}"
+    if guardrails_result.get("pass"):
+        msg += "（Guardrails 校验通过 ✅）"
+    else:
+        msg += "（⚠️ Guardrails 校验未通过，请检查后重新导出）"
+    msg += "\n如需 Word 文档，请运行：python3 scripts/md2docx_strict.py " + output_path
+
+    return {
+        "ok": True,
+        "phase": "phase5",
+        "guardrails_pass": guardrails_result.get("pass", False),
+        "output_path": output_path,
+        "word_count": len(full_content),
+        "message": msg,
+    }
+
+
+# ============================================================
 # 主入口
 # ============================================================
 
@@ -1203,10 +1567,26 @@ def orchestrate(paper_name: str,
         if action == "phase3_feedback":
             return handle_phase3_feedback(paper_name, llm_func=llm_func, **kwargs)
         elif action == "phase3_export":
-            return confirm_phase3_and_export(paper_name)
+            # 兼容旧调用：Phase 3 → 自动进入 Phase 3.5/4/5
+            return orchestrate_phase3_5(paper_name, llm_func)
         else:
-            # 默认：生成论文供预览
             return orchestrate_phase3(paper_name)
+
+    elif phase == "phase3.5":
+        if action == "auto_fix":
+            if not llm_func:
+                return {"ok": False, "error": "auto_fix 需要 llm_func"}
+            return auto_fix_p0_issues(paper_name, llm_func)
+        elif action == "rerun":
+            return orchestrate_phase3_5(paper_name, llm_func)
+        else:
+            return orchestrate_phase3_5(paper_name, llm_func)
+
+    elif phase == "phase4":
+        return orchestrate_phase4(paper_name, llm_func)
+
+    elif phase == "phase5":
+        return orchestrate_phase5(paper_name)
 
     else:
         return {"ok": False, "error": f"未知阶段: {phase}"}

@@ -368,7 +368,21 @@ def build_prompt_package(paper_name: str, node_id: str) -> Dict[str, Any]:
     # 5. 字数范围
     word_range = get_word_count_range(level)
     
-    # 6. 组装 prompt 包
+    # 6. 多工具检索补充（v2.0.9 新增）
+    #    当节点属于核心章节（第3/4/5/6章）且有 research_keywords 时自动触发
+    search_context = ""
+    node_keywords = current.get("research_keywords", []) or []
+    if node_keywords:
+        try:
+            from research_tools import quick_search
+            kw = node_keywords[0] if isinstance(node_keywords[0], str) else str(next(
+                (k for k in node_keywords if k), ""))
+            if kw and len(kw) > 5:
+                search_context = quick_search(kw)
+        except Exception:
+            pass  # 检索失败静默降级
+
+    # 7. 组装 prompt 包
     # 增强项4: content_hint 字段（从 outline_state 节点字段读取，开题报告提取或用户手写）
     content_hint = current.get("content_hint", "").strip()
 
@@ -386,6 +400,7 @@ def build_prompt_package(paper_name: str, node_id: str) -> Dict[str, Any]:
         "required_topics": required_topics,
         "ending_hint": ending_hint,  # 可能为 null
         "content_hint": content_hint,  # 增强项4: 开题报告提取或用户手写
+        "search_context": search_context,  # v2.0.9 多工具检索补充
         "word_count_min": word_range["min"],
         "word_count_max": word_range["max"],
         "writing_style": "学术论文",
@@ -428,6 +443,10 @@ def build_prompt_package_text(package: Dict) -> str:
     if package.get('content_hint'):
         parts.append(f"\n## 开题报告方向参考\n")
         parts.append(f"{package['content_hint']}\n")
+
+    if package.get('search_context'):
+        parts.append(f"\n## 行业/学术数据参考（多工具检索）\n")
+        parts.append(f"{package['search_context']}\n")
 
     if package.get('ending_hint'):
         parts.append(f"\n## 结尾预告\n")
