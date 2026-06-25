@@ -25,9 +25,9 @@ metadata:
 ## 核心架构
 
 ```
-Phase 1（规划）→ Phase 2（双版本起草）→ Phase 2.5（用户确认）
-→ Phase 3（格式审核）→ Phase 3.5（学术深度评审）
-→ Phase 4（整合）→ Phase 5（终审）→ [Phase 5.1 去AI味] → Phase 5.2（Word 输出）
+Phase 1（规划）→ Phase 2（逐节点写作）→ Phase 2.5（内容确认）
+→ Phase 3（整合）→ Phase 3.5（学术深度评审）
+→ Phase 4（修复）→ Phase 5（终审 + Word 输出）
 ```
 
 ⚠️ **阶段强制顺序：** 全部 Phase 必须按顺序执行，不得跳过。Phase 2.5（人工确认门槛）和 Phase 3.5（深度评审）是固定节点，不得跳过。
@@ -39,19 +39,13 @@ Phase 1（规划）→ Phase 2（双版本起草）→ Phase 2.5（用户确认�
 | Agent | 调用方式 | 主责 |
 |-------|---------|------|
 | **Orchestrator** | 当前 session | 调度 / 推进 / 决策 |
-| **H-generator** | `exec hermes chat` | 版本H起草（深度逻辑链） |
-| **Executor** | `sessions_spawn` | 版本O起草 + 格式执行 |
+| **NodeWriter** | `sessions_spawn` | 逐节点内容生成 |
 | **Reviewer** | `sessions_spawn` | Phase 3/5 规则型审核 |
 | **DeepReviewer** | `sessions_spawn` | Phase 3.5 学术深度评审 |
 | **Integrator** | `sessions_spawn` | Phase 4 整合方案 |
 | **WordAgent** | `exec python3` | md2docx执行 + 格式校验 |
 
 ## 关键实现说明
-
-### 版本H/版本O 的分工
-
-- **版本H（Hermes优先）：** `hermes --version` 检测安装，可用则 `hermes chat`，不可用回退到 `sessions_spawn` subagent。版本H prompt 必须包含「数据查询工具」说明（`web_search` / `academic-research` / `arxiv-search-collector`），让 Agent 主动搜索行业数据而非仅靠内部知识。
-- **版本O（OpenClaw）：** 始终通过 `sessions_spawn` 启动 subagent，格式规范优先。
 
 ### 公司信息处理
 
@@ -114,16 +108,16 @@ ctx = research_enrich(node_id, paper_name)
 
 → 生成「写作任务书」用户签收后进入 Phase 2。
 
-### Phase 2：双版本起草
+### Phase 2：逐节点写作
 
-**前置检查：** Phase 1 必填项已确认 / Hermes 可用 / Executor 可用
+**前置检查：** Phase 1 必填项已确认
 
-**章节×版本对照：**
-
-| 章节 | 版本O | 版本H |
-|------|-------|-------|
-| 第1/2/7章 | ✅ 必须 | ❌ |
-| 第3/4/5/6章 | ✅ 必须 | ✅ 必须（核心章节双版本对比） |
+Orchestrator 遍历 outline 树中的每个节点，调用 `write_single_node()` 逐个生成内容。
+每个节点写作前通过 `context_builder.py` 构建 prompt 包，自动注入：
+- 承接上文（auto bridge）
+- 分析维度建议（规则推导）
+- 开题报告方向参考（content_hint）
+- 行业数据参考（quick_search 多工具检索）
 
 **Phase 2 强制检索要求**（关键词中的 `{论文主题行业}` 由 Orchestrator 自动提取）：
 - 第3章 PESTEL 分析前 → 多工具并行搜索「{论文主题行业} 市场规模/趋势/政策」
@@ -132,14 +126,13 @@ ctx = research_enrich(node_id, paper_name)
 - 每章至少 1 个引用标注来源，全文检索记录 ≥ 3 次
 - **多工具并行检索**：调用 `quick_search()` 或 `research_enrich()`，结果自动去重排序
 
-**输出物：** 版本O文件（第1-7章全部）+ 版本H文件（第3-6章全部）
-**状态文件机制：** `{论文名}_任务状态.json`（见 `scripts/state_manager.py`）
+**状态文件机制：** `_orchestrate_state.json`（`scripts/state_manager_v2.py`）
 
-→ 所有文件存在且字数达标后进入 Phase 2.5（用户确认）。
+→ 全部节点写完且字数达标后进入 Phase 2.5（内容确认）。
 
-### Phase 3：双版本审核
+### Phase 3：整合
 
-Reviewer 分别对版本H和版本O输出独立审核报告。审核维度：格式 / 大纲 / 内容准确性 / 查重风险 / 学术规范 / 写作语法。
+Reviewer 对整合版论文进行审核。审核维度：格式 / 大纲 / 内容准确性 / 查重风险 / 学术规范 / 写作语法。
 
 ### Phase 3.5：深度学术评审（固定节点）
 
