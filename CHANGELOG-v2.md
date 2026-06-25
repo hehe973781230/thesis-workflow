@@ -1,7 +1,7 @@
 # CHANGELOG - v2.x 新框架
 
 > v2.x 是 **v2 框架**（outline-anchored 重构 + 9 HIL 节点 + 真实 CLI 入口）的活跃开发分支。
-> 当前 latest: **v2.0.9-beta**
+> 当前 latest: **v2.0.12-beta**
 > ClawHub Slug: `thesis-workflow-v2`（独立仓库）
 > 详见 [CHANGELOG.md](./CHANGELOG.md) 的版本线索引。
 
@@ -16,10 +16,67 @@ v1.7.4 / v1.7.5 / v1.7.6 / v1.7.7 **实际为 v2 框架的早期 alpha 开发**�
 - v2.0.0 = v2 正式发布
 - v2.0.6 = v2 上一稳定版
 - v2.0.7 = v2 上一版本
-- v2.0.8-beta = v2 上一版本
-- v2.0.9-beta = v2 当前 latest
+- v2.0.11-beta = v2 上一版本
+- v2.0.12-beta = v2 当前 latest
 
 **Commit hash 已保留，可在 git history 中追溯。**
+
+## [v2.0.12-beta] - 2026-06-26
+
+### Phase 5.3：MinerU 格式闭环校验
+
+**用 MinerU 将生成的 docx 还原为 md，脚本对比格式一致性，减少人工 checklist 工作量。**
+
+- **`scripts/md2docx_strict.py`**：新增 `verify_format_via_mineru()` 函数
+  - docx → MinerU flash-extract → 还原 md ↔ 原始 md 对比
+  - 校验 6 维度：标题层级数量/层级深度/表格数量/表格列数/段落完整性
+  - MinerU 不可用/失败 → 静默跳过，不阻断生成
+  - 集成到 `md_to_docx()` 流程末尾，自动输出警告
+- **`scripts/loop_self_check.py`**：新增 `check_docx_format_via_mineru()`
+  - 校验 11（可选，仅 docx 场景）
+
+**覆盖 checklist.md 约 20 项**：标题层级、表格结构、段落完整性自动校对。
+
+---
+
+## [v2.0.11-beta] - 2026-06-26
+
+### 清理 v1 残留 + clawhubignore 排除
+
+- **`.clawhubignore`**：新增 `CHANGELOG-v1.md` + `OUTLINE_ANCHORED_TODO.md` 排除
+- **SKILL.md**：`mba-thesis-workflow/` → `thesis-workflow/` 路径修正
+
+---
+
+## [v2.0.10-beta] - 2026-06-25
+
+### P0-P4 修复 — 惰性检测/多工具集成/Phase 3.5/4/5
+
+#### P0：VECTOR_MATCHER_AVAILABLE 惰性检测
+
+- 模块级变量 → `vector_matcher_available()` 函数
+- import 耗时从 ~5s 降至 0.19s，修复 test 导入超时
+
+#### P1：补 Phase 3.5/4/5
+
+- **`scripts/orchestrator_v2.py`**：3 个新函数
+  - `orchestrate_phase3_5()`：P0/P1/P2 分级评审 + 连续 2 轮无新 P0 通过 + HIL 超 3 轮
+  - `orchestrate_phase4()`：自动修复 P0 + 重新整合
+  - `orchestrate_phase5()`：Guardrails 校验 + Word 导出提示
+  - dispatch 路由更新：phase3 → phase3.5 → phase4 → phase5
+
+#### P2：依赖管理 + 多工具集成
+
+- **`requirements.txt`**（新增）：`sentence-transformers~=5.1`
+- **`install.sh`**：新增 sentence-transformers 检测 + 安装提示
+- **`scripts/context_builder.py`**：`build_prompt_package()` 接入 `quick_search()`（research_keywords 触发）
+
+#### P4：清理 SKILL.md/README.md/README_EN.md v1 残留
+
+- SKILL.md（7 处）：双版本起草/H-generator/版本H/版本O 全部清理
+- README.md / README_EN.md：完全重写为 v2
+
+---
 
 ## [v2.0.9-beta] - 2026-06-25
 

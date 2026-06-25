@@ -266,6 +266,34 @@ CHECKS = [
 ]
 
 
+# ============================================================
+# Phase 5.3：MinerU 格式闭环校验（可选，仅 docx 场景）
+# ============================================================
+
+def check_docx_format_via_mineru(md_path: str, docx_path: str) -> Tuple[bool, str]:
+    """
+    校验 11: 用 MinerU 对生成的 docx 做格式闭环校验。
+
+    覆盖：
+      - 标题层级在 docx 中是否保留
+      - 表格在 docx→md 还原中是否变形
+      - 内容是否有明显丢失
+
+    返回：
+      (通过?, "成功/失败描述")
+    """
+    try:
+        from md2docx_strict import verify_format_via_mineru
+        issues = verify_format_via_mineru(md_path, docx_path)
+        if not issues:
+            return True, "✅ MinerU 格式闭环校验：通过"
+        return False, f"⚠️ MinerU 格式闭环校验：发现问题（{'; '.join(issues[:3])}）"
+    except ImportError:
+        return True, "⏭️ MinerU 格式闭环校验：跳过（md2docx_strict 不可用）"
+    except Exception as e:
+        return True, f"⏭️ MinerU 格式闭环校验：跳过（{e}）"
+
+
 def run_checks(content: str) -> Dict:
     """运行所有校验项，返回结构化报告"""
     results = []

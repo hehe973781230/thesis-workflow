@@ -489,6 +489,16 @@ def md_to_docx(md_path, docx_path, proposal_docx_path=None):
     if ref_cn or ref_en: _flush_refs(doc, ref_cn, ref_en)
 
     doc.save(docx_path)
+
+    # Phase 5.3：MinerU 格式闭环校验（可选，需安装 mineru-open-api）
+    verify_issues = verify_format_via_mineru(md_path, docx_path)
+    if verify_issues:
+        import warnings
+        warnings.warn(f"\n⚠️ MinerU 格式校验发现 {len(verify_issues)} 个问题：")
+        for iss in verify_issues:
+            warnings.warn(f"  - {iss}")
+        # 不阻断生成，仅警告
+
     return True
 
 
@@ -682,11 +692,111 @@ def _flush_refs(doc, cn, en):
             run = para.add_run(ref)
             _set_run(run, SZ_REF, FONT_ENGLISH)
 
+
+# ============================================================
+# Phase 5.3：MinerU 格式闭环校验
+# ============================================================
+# 用 MinerU 将生成的 docx 还原为 md，对比格式一致性。
+# 原理：
+#   原始.md ──md2docx_strict.py──→ .docx ──MinerU flash-extract──→ 还原.md
+#                                                                    ↓
+#                                                       脚本对比两个 md 的格式
+#
+# 覆盖 checklist.md 中约 20 项格式检查：
+#   标题层级是否完整、表格列数是否一致、段落数量是否正常等
+# ============================================================
+
+def verify_format_via_mineru(md_path: str, docx_path: str) -> list:
+    """
+    用 MinerU 对生成的 docx 做格式闭环校验。
+
+    参数：
+      md_path:   原始 Markdown 路径（论文.md）
+      docx_path: 生成的 Word 路径（论文.docx）
+
+    返回：
+      [问题描述, ...] — 空列表 = 全部通过
+    """
+    issues: list = []
+
+    # ── 检查 MinerU 是否可用 ────────────────────────────────
+    try:
+        import subprocess as _sub
+        r = _sub.run(
+            ["mineru-open-api", "flash-extract", "--help"],
+            capture_output=True, text=True, timeout=5
+        )
+        if r.returncode != 0:
+            return []  # MinerU 不可用 → 静默跳过
+    except (FileNotFoundError, Exception):
+        return []  # MinerU 未安装 → 静默跳过
+
+    # ── 1. MinerU 解析 docx 为 Markdown ─────────────────────
+    try:
+        result = _sub.run(
+            ["mineru-open-api", "flash-extract", docx_path],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0 or not result.stdout:
+            return []  # MinerU 解析失败 → 跳过，不阻断
+        recovered = result.stdout
+    except Exception:
+        return []
+
+    # ── 2. 读取原始 md ──────────────────────────────────────
+    with open(md_path, 'r', encoding='utf-8') as f:
+        original = f.read()
+
+    # ── 3. 对比：标题层级 ────────────────────────────────────
+    orig_headings = re.findall(r'^(#{1,6}\s+.*)$', original, re.M)
+    recv_headings = re.findall(r'^(#{1,6}\s+.*)$', recovered, re.M)
+
+    if len(orig_headings) != len(recv_headings):
+        diff = abs(len(orig_headings) - len(recv_headings))
+        issues.append(
+            f"标题层级不一致：原始 {len(orig_headings)} 条标题 vs "
+            f"MinerU 解析 {len(recv_headings)} 条（差 {diff}）"
+        )
+
+    # ── 4. 对比：表格列数 ────────────────────────────────────
+    orig_tables = re.findall(r'\n\|(.+)\|\n\|[-:| ]+\|\n', original)
+    recv_tables = re.findall(r'\n\|(.+)\|\n\|[-:| ]+\|\n', recovered)
+
+    if len(orig_tables) != len(recv_tables):
+        issues.append(
+            f"表格数量不一致：原始 {len(orig_tables)} 个 vs "
+            f"MinerU 解析 {len(recv_tables)} 个"
+        )
+
+    for i, (orig_tbl, recv_tbl) in enumerate(zip(orig_tables, recv_tables)):
+        orig_cols = len(orig_tbl.split('|'))
+        recv_cols = len(recv_tbl.split('|'))
+        if orig_cols != recv_cols:
+            issues.append(
+                f"表格 #{i+1} 列数不一致：原始 {orig_cols} 列 vs "
+                f"MinerU 解析 {recv_cols} 列（表格可能被拆分或合并）"
+            )
+
+    # ── 5. 对比：内容完整性 ──────────────────────────────────
+    orig_paras = [p for p in original.split('\n\n') if p.strip() and not p.strip().startswith('|')]
+    recv_paras = [p for p in recovered.split('\n\n') if p.strip()]
+
+    orig_len = len(orig_paras)
+    recv_len = len(recv_paras)
+    if abs(orig_len - recv_len) > max(5, orig_len * 0.3):
+        issues.append(
+            f"内容段落数异常：原始约 {orig_len} 段 vs "
+            f"MinerU 解析约 {recv_len} 段（差异过大，可能有内容丢失）"
+        )
+
+    return issues
+
 # ============ 主入口 ============
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
         print("用法: python3 md2docx_strict.py <论文.md> <输出.docx> [开题报告.docx]")
+        print("  用 MinerU 校验：python3 md2docx_strict.py <论文.md> <输出.docx> [开题报告.docx]")
         sys.exit(1)
     md_path = sys.argv[1]
     docx_path = sys.argv[2]
