@@ -307,7 +307,7 @@ python3 scripts/loop_self_check.py --file 论文_xxx.docx --verify-docx         
 ## 附录：脚本与文档结构
 
 ```
-mba-thesis-workflow/
+thesis-workflow/
 ├── SKILL.md                    ← 本文件（简版触发器 + 核心逻辑）
 ├── README.md / README_EN.md    ← 安装/使用说明
 ├── CHANGELOG.md                ← 版本日志

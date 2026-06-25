@@ -4,3 +4,5 @@ config.env
 SKILL.md.bak
 *.pyc
 __pycache__/
+CHANGELOG-v1.md
+OUTLINE_ANCHORED_TODO.md
