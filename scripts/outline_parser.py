@@ -8,6 +8,7 @@ v2.0.7 新增: 引擎切换 B(MinerU)→A(heuristic) 单向降级
 import re
 import os
 import shutil
+import logging
 import docx
 import json
 import xml.etree.ElementTree as ET
@@ -16,12 +17,26 @@ from typing import Optional, Tuple, List, Dict, Any, Callable
 from collections import Counter
 from state_manager_v2 import outline_load
 
+logger = logging.getLogger(__name__)
+
 # ============================================================
 # v2.0.7 引擎切换状态(F4 进程级 + F5 跨 paper 共享)
 # ============================================================
 _mineru_check_done = False
 _mineru_available = False
 _fallback_used = False
+
+# ============================================================
+# v2.0.9 向量标题匹配（可选依赖，BGE-small-zh）
+# ============================================================
+try:
+    from simple_embedder import TitleMatcher
+    VECTOR_MATCHER_AVAILABLE = TitleMatcher.is_available()
+    # 覆盖 is_available 结果（首次导入时已加载模型）
+except ImportError:
+    VECTOR_MATCHER_AVAILABLE = False
+except Exception:
+    VECTOR_MATCHER_AVAILABLE = False
 
 
 def reset_fallback_state():
@@ -942,23 +957,46 @@ def extract_proposal_content(
     unmatched_headings = [info for info in heading_info if info["text"] not in heading_to_node]
     ai_heading_matched_count = 0
 
-    if unmatched_headings and llm_func:
-        heading_texts = [info["text"] for info in unmatched_headings]
-        ai_results = _llm_match_proposal_headings(heading_texts, nodes, llm_func)
+    if unmatched_headings:
+        # ── 2a: 向量标题匹配（确定性 + 毫秒级，v2.0.9 新增）────
+        if VECTOR_MATCHER_AVAILABLE:
+            heading_texts = [info["text"] for info in unmatched_headings]
+            try:
+                matches = TitleMatcher.match_headings(
+                    heading_texts, nodes, threshold=0.75
+                )
+                for node_id, heading_text, score in matches:
+                    if node_id in node_map:
+                        heading_to_node[heading_text] = node_id
+                        ai_heading_matched_count += 1
+                        logger.info(
+                            "向量匹配: %s → [%s] (score=%.3f)",
+                            heading_text, node_id, score,
+                        )
+            except Exception:
+                pass  # 向量匹配失败 → 降级到 LLM 兜底
 
-        for i, info in enumerate(unmatched_headings):
-            if i < len(ai_results):
-                result = ai_results[i]
-                confidence = result.get("confidence", 0.0)
-                node_id = result.get("node_id")
+        # ── 2b: LLM 标题匹配（向量未匹配或无向量依赖时兜底）────
+        still_unmatched = [
+            info for info in unmatched_headings
+            if info["text"] not in heading_to_node
+        ]
+        if still_unmatched and llm_func:
+            heading_texts = [info["text"] for info in still_unmatched]
+            ai_results = _llm_match_proposal_headings(heading_texts, nodes, llm_func)
 
-                if confidence >= confidence_threshold and node_id and node_id in node_map:
-                    heading_to_node[info["text"]] = node_id
-                    ai_heading_matched_count += 1
-                elif confidence >= 0.5 and node_id and node_id in node_map:
-                    # 中等置信度：记录但不自动归入（正文跟随时特殊处理）
-                    heading_to_node[info["text"]] = node_id  # 暂存，后续正文用
-                # 低置信度：不归入，正文全部游离
+            for i, info in enumerate(still_unmatched):
+                if i < len(ai_results):
+                    result = ai_results[i]
+                    confidence = result.get("confidence", 0.0)
+                    node_id = result.get("node_id")
+
+                    if confidence >= confidence_threshold and node_id and node_id in node_map:
+                        heading_to_node[info["text"]] = node_id
+                        ai_heading_matched_count += 1
+                    elif confidence >= 0.5 and node_id and node_id in node_map:
+                        # 中等置信度：暂存，后续正文跟随用
+                        heading_to_node[info["text"]] = node_id
 
     # ---- 处理正文段落 ----
     # 修复 P0-1：未匹配标题前的段落默认归到第一个 L1 章节，避免 79 段全 unclassified

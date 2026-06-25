@@ -1,7 +1,7 @@
 ---
 name: thesis-workflow-v2
-version: 2.0.8-beta
-description: "v2 新框架（beta）：multi-search并行引擎 + RuntimeLLM零硬编码。v2 重构为 outline-anchored 设计 + 9 HIL 节点 + 真实 CLI 入口。⚠️ 测试版，需独立安装（不覆盖 v1）。"
+version: 2.0.9-beta
+description: "v2 新框架（beta）：BGE向量匹配 + multi-search + RuntimeLLM。v2 重构为 outline-anchored 设计 + 9 HIL 节点 + 真实 CLI 入口。⚠️ 测试版，需独立安装（不覆盖 v1）。"
 metadata:
   clawdbot:
     emoji: "📝"

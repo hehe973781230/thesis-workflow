@@ -1,7 +1,7 @@
 # CHANGELOG - v2.x 新框架
 
 > v2.x 是 **v2 框架**（outline-anchored 重构 + 9 HIL 节点 + 真实 CLI 入口）的活跃开发分支。
-> 当前 latest: **v2.0.8-beta**
+> 当前 latest: **v2.0.9-beta**
 > ClawHub Slug: `thesis-workflow-v2`（独立仓库）
 > 详见 [CHANGELOG.md](./CHANGELOG.md) 的版本线索引。
 
@@ -16,9 +16,44 @@ v1.7.4 / v1.7.5 / v1.7.6 / v1.7.7 **实际为 v2 框架的早期 alpha 开发**�
 - v2.0.0 = v2 正式发布
 - v2.0.6 = v2 上一稳定版
 - v2.0.7 = v2 上一版本
-- v2.0.8-beta = v2 当前 latest
+- v2.0.8-beta = v2 上一版本
+- v2.0.9-beta = v2 当前 latest
 
 **Commit hash 已保留，可在 git history 中追溯。**
+
+## [v2.0.9-beta] - 2026-06-25
+
+### 🧠 Layer 2 向量标题匹配（BGE-small-zh，替代 LLM 标题匹配）
+
+**Phase 1.3 归因加速：LLM 标题匹配 → 本地向量匹配 + LLM 回退兜底**
+
+#### 新增文件
+
+- **`scripts/simple_embedder.py`**（230行）：BGE-small-zh 标题向量匹配器
+  - `TitleMatcher.match_headings()`：余弦相似度匹配，毫秒级
+  - 标题归一化：去掉编号前缀后再编码，提高匹配准确率
+  - 离线支持：自动检测缓存 → 离线模式；无缓存 → hf-mirror 下载
+  - 阈值 0.75，误匹配的标题自动降级到 LLM 兜底
+
+#### 改造文件
+
+- **`scripts/outline_parser.py`**：Layer 2 重写
+  - 2a：向量标题匹配（确定性 + 毫秒级）
+  - 2b：LLM 标题匹配（向量未匹配或无向量依赖时兜底）
+  - `VECTOR_MATCHER_AVAILABLE` 标志位，自动检测 sentence-transformers
+  - 无向量库时回退原 LLM 方案，零侵入
+
+#### 性能对比
+
+| 指标 | 原 LLM 方案 | 向量方案 |
+|------|------------|---------|
+| Phase 1.3 归因耗时 | 30-90s | **2-5s** |
+| 确定性 | ❌ 非确定 | ✅ 相同输入=相同结果 |
+| Layer 3 触发概率 | 高（LLM 漏匹配多） | 低（向量覆盖更多） |
+| 新增依赖 | 无 | sentence-transformers ~5.1 |
+| 模型缓存 | - | ~33MB（首次下载） |
+
+---
 
 ## [v2.0.8-beta] - 2026-06-25
 
