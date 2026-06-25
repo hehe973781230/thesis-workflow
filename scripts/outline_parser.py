@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-outline_parser.py - 目录解析器 v1.0
+outline_parser.py - 目录解析器 v2.0.7
 基于 v1.2 算法(3样本验证),支持固定规则 + AI兜底 + 手动输入三层解析
+v2.0.7 新增: 引擎切换 B(MinerU)→A(heuristic) 单向降级
 """
 
 import re
 import os
+import shutil
 import docx
 import json
 import xml.etree.ElementTree as ET
@@ -13,6 +15,84 @@ from datetime import datetime
 from typing import Optional, Tuple, List, Dict, Any, Callable
 from collections import Counter
 from state_manager_v2 import outline_load
+
+# ============================================================
+# v2.0.7 引擎切换状态(F4 进程级 + F5 跨 paper 共享)
+# ============================================================
+_mineru_check_done = False
+_mineru_available = False
+_fallback_used = False
+
+
+def reset_fallback_state():
+    """重置模块级状态(测试用 + 进程重启模拟)"""
+    global _mineru_check_done, _mineru_available, _fallback_used
+    _mineru_check_done = False
+    _mineru_available = False
+    _fallback_used = False
+
+
+def _is_mineru_available() -> bool:
+    """
+    检测 mineru-open-api CLI 是否在 PATH(一次性缓存)
+    F4=进程级: 只在第一次调用时检测,后续用缓存值
+    """
+    global _mineru_check_done, _mineru_available
+    if not _mineru_check_done:
+        _mineru_available = shutil.which("mineru-open-api") is not None
+        _mineru_check_done = True
+    return _mineru_available
+
+
+def _log_fallback_to_audit(from_engine: str, to_engine: str, reason: str, docx_path: str):
+    """
+    记录降级事件到 stdout + state.audit_log(F2=是)
+    F1=否: 不弹窗(不调用 warnings.warn)
+    """
+    from pathlib import Path
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
+
+    # 1. stdout 打印(主流程可捕获)
+    print(f"[AUDIT {timestamp}] engine_fallback: {from_engine} -> {to_engine}")
+    print(f"           reason: {reason[:200]}")
+    print(f"           docx: {docx_path}")
+
+    # 2. 尝试写入 state.audit_log(函数内 import,避免循环依赖 + 方便测试 patch)
+    try:
+        from state_manager_v2 import load_orchestrate_state, save_orchestrate_state
+
+        # 从 docx_path 推断 paper_name
+        # 假设路径是 ~/.openclaw/workspace/{paper_name}/xxx.docx
+        try:
+            path = Path(docx_path).resolve()
+            parts = path.parts
+            paper_name = None
+            if ".openclaw" in parts and "workspace" in parts:
+                idx = parts.index("workspace")
+                if idx + 1 < len(parts):
+                    paper_name = parts[idx + 1]
+
+            if paper_name:
+                state = load_orchestrate_state(paper_name)
+                if state:
+                    if "audit_log" not in state:
+                        state["audit_log"] = []
+                    state["audit_log"].append({
+                        "action": "outline_engine_fallback",
+                        "from_engine": from_engine,
+                        "to_engine": to_engine,
+                        "reason": reason[:500],
+                        "docx_path": docx_path,
+                        "timestamp": timestamp
+                    })
+                    save_orchestrate_state(paper_name, state)
+        except Exception:
+            # 路径解析或 state 读写失败不阻断主流程
+            pass
+    except Exception:
+        # audit 模块 import 失败也不阻断
+        pass
+
 
 # ============================================================
 # 固定规则层(v1.2 通用正则,已在3样本验证)
@@ -106,12 +186,69 @@ def extract_outline_from_text(text: str) -> Tuple[List[Dict], List[Dict]]:
     return _parse_outline_lines(lines)
 
 
-def extract_outline_from_docx(docx_path: str) -> Tuple[List[Dict], List[Dict]]:
+def _preprocess_paragraphs(paragraphs: List[Tuple[int, str, str]]) -> List[Tuple[int, str, str]]:
     """
-    从 docx 文件解析目录
-    返回: (nodes_list, issues_list)
+    v2.0.7 A 路径: 段落预合并
+    合并被 Word/编辑器拆段的章节号。规则:
+      - 纯数字 + ".X"    → "N.M"     (如 "1" + ".1 标题")
+      - "X.Y" + " 标题"   → "X.Y 标题"  (如 "1.1" + " 标题")
+      - "第N章" + "标题"   → "第N章 标题"
+      - ".X.Y" + " 标题"   → ".X.Y 标题"
+    返回合并后的 paragraphs 列表。
+    """
+    merged = []
+    i = 0
+    while i < len(paragraphs):
+        idx, style, text = paragraphs[i]
+        text = text.strip()
+
+        if not text:
+            merged.append((idx, style, text))
+            i += 1
+            continue
+
+        # 检查是否需要跟下一段合并
+        if i + 1 < len(paragraphs):
+            next_idx, next_style, next_text = paragraphs[i + 1]
+            next_text = next_text.strip()
+
+            # 规则 1: 纯数字 + ".X" 开头(如 "1" + ".1 标题" → "1.1 标题")
+            if re.match(r'^\d+$', text) and re.match(r'^\.\d', next_text):
+                merged.append((idx, style, f"{text}{next_text}"))
+                i += 2
+                continue
+
+            # 规则 2: "X.Y" + 后续段(带空格分隔,如 "1.1" + " 标题" → "1.1 标题")
+            if re.match(r'^\d+\.\d+$', text) and next_text:
+                merged.append((idx, style, f"{text} {next_text}"))
+                i += 2
+                continue
+
+            # 规则 3: "第N章" + 后续段(中文数字也算,如 "第一章" + "绪论")
+            if re.match(r'^第[\d一二三四五六七八九十]+章$', text) and next_text:
+                merged.append((idx, style, f"{text} {next_text}"))
+                i += 2
+                continue
+
+            # 规则 4: ".X.Y" + 后续段(如 ".1.1" + " 标题")
+            if re.match(r'^\.\d+\.\d+$', text) and next_text:
+                merged.append((idx, style, f"{text}{next_text}"))
+                i += 2
+                continue
+
+        merged.append((idx, style, text))
+        i += 1
+
+    return merged
+
+
+def extract_outline_from_docx_with_heuristic(docx_path: str) -> Tuple[List[Dict], List[Dict]]:
+    """
+    v2.0.7 A 路径: python-docx + 启发式预合并
+    适用场景: MinerU 不可用 或 已降级。
     """
     paragraphs = extract_text_from_docx(docx_path)
+    paragraphs = _preprocess_paragraphs(paragraphs)  # v2.0.7 新增
 
     # 定位大纲区
     start_idx = end_idx = None
@@ -132,6 +269,106 @@ def extract_outline_from_docx(docx_path: str) -> Tuple[List[Dict], List[Dict]]:
     # 解析章节
     lines = [p[2].strip() for p in paragraphs[start_idx + 1:end_idx]]
     return _parse_outline_lines(lines)
+
+
+def _strip_markdown_bold(text: str) -> str:
+    """
+    v2.0.7 新增: 清理 markdown 加粗标记
+    MinerU 输出常见格式: "## **第1章 绪论**" → "第1章 绪论"
+    同时去除可能的 markdown heading 前缀 "## "、"### " 等
+    """
+    s = text.strip()
+    # 去除 markdown heading 前缀
+    s = re.sub(r'^#{1,6}\s*', '', s)
+    # 去除加粗标记 **xxx**(保留内容)
+    s = re.sub(r'\*\*([^*]+)\*\*', r'\1', s)
+    # 去除单星号 *xxx*(如果有)
+    s = re.sub(r'\*([^*]+)\*', r'\1', s)
+    return s.strip()
+
+
+def extract_outline_from_docx_via_mineru(
+    docx_path: str,
+    language: str = "ch",
+    timeout: int = 120
+) -> Tuple[List[Dict], List[Dict]]:
+    """
+    v2.0.7 B 路径: 用 MinerU 解析 docx → md → outline
+    优点: 保留文档结构,正确识别 heading(不会拆段)
+    缺点: ⚠️ 上传 docx 到 MinerU 云端(隐私风险)
+    前置: mineru-open-api CLI 已在 PATH
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    if not _is_mineru_available():
+        raise RuntimeError(
+            "mineru-open-api 未安装。请运行: npm install -g mineru-open-api"
+        )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = subprocess.run(
+            ["mineru-open-api", "flash-extract", docx_path,
+             "-o", tmpdir, "--language", language],
+            capture_output=True, text=True, timeout=timeout
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"mineru-open-api 失败 (code={result.returncode}): {result.stderr[:500]}"
+            )
+
+        # 找生成的 md 文件
+        md_files = list(Path(tmpdir).rglob("*.md"))
+        if not md_files:
+            raise RuntimeError(f"MinerU 没生成 md 文件: {tmpdir}")
+
+        md_text = md_files[0].read_text(encoding="utf-8")
+        # 用 markdown heading 解析(天然正确)
+        return extract_outline_from_text(md_text)
+
+
+def extract_outline_from_docx(docx_path: str) -> Tuple[List[Dict], List[Dict]]:
+    """
+    从 docx 文件解析目录
+    v2.0.7 统一入口: 根据模块级状态决策调用哪个路径。
+    降级语义(F1-F5 决策):
+      - F1=否: 不弹窗(用户静默)
+      - F2=是: 降级事件写 audit_log
+      - F3=1: MinerU 失败 1 次后立即降级
+      - F4=进程级: _fallback_used 是模块全局
+      - F5=共享: 跨 paper 共享 _fallback_used
+    单向降级: B (MinerU) → A (heuristic),A 失败不回 B。
+    """
+    global _fallback_used
+
+    # 情况 1: MinerU 不可用 → 直接 A
+    if not _is_mineru_available():
+        return extract_outline_from_docx_with_heuristic(docx_path)
+
+    # 情况 2: 已降级过 → 直接 A(不回环,F5=共享)
+    if _fallback_used:
+        return extract_outline_from_docx_with_heuristic(docx_path)
+
+    # 情况 3: 尝试 MinerU(B 路径,F3=1 次机会)
+    try:
+        return extract_outline_from_docx_via_mineru(docx_path)
+
+    except KeyboardInterrupt:
+        # 用户中断,不降级,不写 audit
+        raise
+
+    except Exception as e:
+        # 单向降级: B → A(F2=是 写 audit,F1=否 不弹窗,F4=进程级 标记 fallback_used)
+        _fallback_used = True
+        _log_fallback_to_audit(
+            from_engine="mineru",
+            to_engine="heuristic",
+            reason=str(e),
+            docx_path=docx_path
+        )
+        return extract_outline_from_docx_with_heuristic(docx_path)
 
 
 def _parse_outline_lines(lines: List[str]) -> Tuple[List[Dict], List[Dict]]:

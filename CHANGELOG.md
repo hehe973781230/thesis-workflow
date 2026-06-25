@@ -7,7 +7,7 @@
 | 版本线 | 当前 latest | ClawHub Slug | 状态 |
 |--------|------------|--------------|------|
 | **v1.x**（稳定版）| v1.7.3 | `thesis-workflow` | 长期维护，仅兼容性修复 |
-| **v2.x**（新框架）| v2.0.6 | `thesis-workflow-v2` | ⚠️ 测试版，独立安装，需充分测试 |
+| **v2.x**（新框架）| v2.0.8-beta | `thesis-workflow-v2` | ⚠️ 测试版，multi-search并行引擎 + RuntimeLLM |
 
 > **重要**：v1 和 v2 是**两个独立发布的 skill**，用不同 ClawHub slug，**安装路径不同**，**互不影响**。
 > 详见 `references/git-workflow.md` 和分支管理策略。
@@ -18,7 +18,7 @@
   - v1.0 → v1.7.3 完整历史
   - 当前 ClawHub `thesis-workflow` latest
 - **v2.x 历史**：见 [CHANGELOG-v2.md](./CHANGELOG-v2.md)
-  - v2.0.0 → v2.0.6 完整历史
+  - v2.0.0 → v2.0.8-beta 完整历史
   - v1.7.4-v1.7.7 实际为 v2 早期 alpha 版本（commit hash 保留）
   - 当前 ClawHub `thesis-workflow-v2` latest
 

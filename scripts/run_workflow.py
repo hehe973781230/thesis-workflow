@@ -17,9 +17,12 @@ P0-2 + P0-3 修复：补 v2 真实入口
 import argparse
 import json
 import os
+import subprocess
 import sys
+import threading
+import urllib.request
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -37,6 +40,615 @@ from state_manager_v2 import (
 from node_writer import write_node, extract_key_conclusion_from_response
 
 WORKSPACE = Path(os.path.expanduser("~/.openclaw/workspace"))
+
+
+# ============================================================
+# RuntimeLLM：从当前运行 session 动态获取模型配置
+# ============================================================
+# 信息来源：
+#   1. openclaw sessions list --all-agents --active 30 --json → 当前 session（零硬编码）
+#   2. agent plugin catalog → provider baseUrl + apiKey
+# ============================================================
+
+class RuntimeLLM:
+    """
+    复用当前运行 session 的模型配置，构造 llm_func。
+
+    完全零硬编码 agent_id / model / API key。
+    动态从以下位置读取：
+      - openclaw sessions list --all-agents --active 30 --json → 当前 session 模型名 + provider
+      - agent plugin catalog → provider baseUrl + apiKey + apiType
+    """
+
+    def __init__(self, agent_id: Optional[str] = None):
+        self._session_info: Optional[Dict] = None
+        self._lock = threading.Lock()
+
+    # ---- 内部：获取当前 agent 的 openclaw 可执行文件路径 ----
+    @staticmethod
+    def _find_openclaw() -> str:
+        """查找 openclaw CLI 路径"""
+        # 1. 尝试 nvm node 目录下的 openclaw
+        home = Path.home()
+        nvm_openclaw = (
+            home / ".nvm/versions/node/v24.14.0/bin/openclaw"
+        )
+        if nvm_openclaw.exists():
+            return str(nvm_openclaw)
+
+        # 2. 尝试 PATH 中的 openclaw
+        for path in os.environ.get("PATH", "").split(os.pathsep):
+            candidate = Path(path) / "openclaw"
+            if candidate.exists() and not candidate.is_dir():
+                return str(candidate)
+
+        raise RuntimeError("找不到 openclaw CLI，请确保已安装并位于 PATH 中")
+
+    # ---- 内部：从当前运行 session 获取模型信息 ----
+    def _get_session_info(self) -> Dict:
+        """
+        通过 openclaw sessions list --all-agents --active 30 获取当前 session 信息。
+
+        零硬编码：不传 --agent 参数，由 Gateway 自动识别当前调用者 session。
+        """
+        try:
+            openclaw_path = self._find_openclaw()
+            result = subprocess.run(
+                [openclaw_path, "sessions", "list",
+                 "--all-agents",
+                 "--active", "30",
+                 "--json"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"openclaw sessions list failed: {result.stderr}")
+
+            data = json.loads(result.stdout)
+            sessions = data.get("sessions", [])
+            if not sessions:
+                raise RuntimeError("未找到活跃 session（30分钟内）")
+
+            # sessions[0] 就是当前调用者的 session（Gateway 自动路由）
+            current = sessions[0]
+            session_key = current.get("key", "")  # e.g. agent:zz:feishu:direct:ou_xxx
+
+            # 从 session key 解析 agent_id
+            parts = session_key.split(":")
+            agent_id = parts[1] if len(parts) >= 2 else "unknown"
+
+            return {
+                "model": current.get("model", ""),
+                "provider": current.get("modelProvider", ""),
+                "agent_id": agent_id,
+                "session_key": session_key,
+            }
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("openclaw sessions list 超时")
+        except Exception as e:
+            raise RuntimeError(f"读取 session 信息失败: {e}")
+
+    # ---- 内部：从 agent plugin catalog 读取 provider 凭证 ----
+    def _get_provider_config(self, provider: str, agent_id: str) -> Dict:
+        """
+        从 ~/.openclaw/agents/{agent_id}/agent/plugins/*/catalog.json 读取凭证。
+
+        plugin 目录名（如 minimax）可能与 provider 名（如 minimax-cn）不同，
+        所以需要扫描 plugins/ 下所有子目录，找包含目标 provider 的 catalog。
+        """
+        plugins_base = Path.home() / ".openclaw" / "agents" / agent_id / "agent" / "plugins"
+
+        if not plugins_base.exists():
+            raise RuntimeError(f"plugins 目录不存在: {plugins_base}")
+
+        catalog_path = None
+        for subdir in plugins_base.iterdir():
+            if not subdir.is_dir():
+                continue
+            candidate = subdir / "catalog.json"
+            if candidate.exists():
+                try:
+                    with open(candidate) as f:
+                        catalog = json.load(f)
+                    providers = catalog.get("providers", {})
+                    if provider in providers or "minimax-cn" in providers:
+                        # 找到了包含目标 provider 的 catalog
+                        catalog_path = candidate
+                        break
+                except Exception:
+                    continue
+
+        if not catalog_path:
+            raise RuntimeError(
+                f"在 {plugins_base} 下未找到包含 provider '{provider}' 的 catalog"
+            )
+
+        with open(catalog_path) as f:
+            catalog = json.load(f)
+
+        providers = catalog.get("providers", {})
+        # 精确匹配 provider，再尝试 minimax-cn 作为 fallback
+        cfg = providers.get(provider) or providers.get("minimax-cn", {})
+
+        if not cfg:
+            raise RuntimeError(f"provider '{provider}' 未在 catalog 中找到")
+
+        return {
+            "base_url": cfg["baseUrl"],
+            "api_key": cfg["apiKey"],
+            "api_type": cfg.get("api", "anthropic-messages"),
+        }
+
+    # ---- 公开接口：构造 llm_func ----
+    def make_llm_func(self, model: Optional[str] = None) -> Callable[[str], str]:
+        """
+        返回 llm_func(prompt: str) -> str。
+
+        参数 model 为 None 时，自动使用当前 session 的模型。
+        """
+        if self._session_info is None:
+            with self._lock:
+                if self._session_info is None:
+                    self._session_info = self._get_session_info()
+
+        target_model = model or self._session_info["model"]
+        provider = self._session_info["provider"]
+        agent_id = self._session_info["agent_id"]
+
+        provider_cfg = self._get_provider_config(provider, agent_id)
+        base_url = provider_cfg["base_url"]
+        api_key = provider_cfg["api_key"]
+        api_type = provider_cfg["api_type"]
+
+        def llm_func(prompt: str) -> str:
+            if api_type == "anthropic-messages":
+                return self._call_anthropic(base_url, api_key, target_model, prompt)
+            else:
+                # openai-completions 格式（deepseek 等）
+                return self._call_openai(base_url, api_key, target_model, prompt)
+
+        return llm_func
+
+    def _call_anthropic(self, base_url: str, api_key: str, model: str, prompt: str) -> str:
+        """调用 Anthropic-format API（minimax-cn 等）"""
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 4096,
+        }
+        data = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            f"{base_url}/v1/messages",
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            result = json.loads(resp.read())
+
+        # 从 content 数组中提取 type=="text" 的块
+        for block in result.get("content", []):
+            if block.get("type") == "text":
+                return block["text"]
+
+        stop_reason = result.get("stop_reason", "")
+        if stop_reason == "max_tokens":
+            raise RuntimeError("LLM 返回被截断（max_tokens），请增加 max_tokens 参数")
+        raise RuntimeError(f"LLM 响应为空，stop_reason={stop_reason}")
+
+    def _call_openai(self, base_url: str, api_key: str, model: str, prompt: str) -> str:
+        """调用 OpenAI-completions-format API（deepseek 等）"""
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 4096,
+        }
+        data = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            f"{base_url}/chat/completions",
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            result = json.loads(resp.read())
+        return result["choices"][0]["message"]["content"]
+
+    def current_model(self) -> str:
+        """返回当前 session 使用的模型"""
+        if self._session_info is None:
+            with self._lock:
+                if self._session_info is None:
+                    self._session_info = self._get_session_info()
+        return self._session_info["model"]
+
+    def current_agent_id(self) -> str:
+        """返回当前 agent ID"""
+        if self._session_info is None:
+            with self._lock:
+                if self._session_info is None:
+                    self._session_info = self._get_session_info()
+        return self._session_info["agent_id"]
+
+
+# 全局单例（延迟初始化）
+_runtime_llm: Optional[RuntimeLLM] = None
+
+
+def get_runtime_llm() -> RuntimeLLM:
+    """获取 RuntimeLLM 全局单例"""
+    global _runtime_llm
+    if _runtime_llm is None:
+        _runtime_llm = RuntimeLLM()
+    return _runtime_llm
+
+
+# ============================================================
+# Pre-flight Check：依赖检测 + 自动安装
+# ============================================================
+
+from enum import Enum
+
+
+class DepStatus(Enum):
+    OK = "ok"          # 可用
+    MISSING = "missing" # 缺失（不可安装）
+    INSTALLABLE = "installable"  # 可安装
+    FAILED = "failed"   # 检测失败（不阻断）
+
+
+class Dependency:
+    def __init__(self, name: str, check_fn, install_cmd: str = None,
+                 install_fn=None, required: bool = False,
+                 block_on_fail: bool = False,
+                 description: str = "",
+                 install_category: str = "silent"):
+        """
+        install_category:
+          - "silent":   pip/pipx 等无交互命令，可直接 subprocess 自动执行
+          - "needs_ai": openclaw skills / mcp 等可能有交互式确认，需 AI 触发
+        """
+        self.name = name
+        self.check_fn = check_fn
+        self.install_cmd = install_cmd
+        self.install_fn = install_fn
+        self.required = required
+        self.block_on_fail = block_on_fail
+        self.description = description
+        self.install_category = install_category  # "silent" | "needs_ai"
+        self.status: DepStatus = DepStatus.MISSING
+        self.version: str = ""
+        self.error: str = ""
+        self.can_auto_install: bool = install_fn is not None
+
+    def check(self) -> "Dependency":
+        try:
+            result = self.check_fn()
+            self.status = DepStatus.OK
+            self.version = str(result) if result and result is not True else ""
+        except Exception as e:
+            self.error = str(e)
+            if self.can_auto_install:
+                self.status = DepStatus.INSTALLABLE
+            else:
+                self.status = DepStatus.MISSING if self.required else DepStatus.FAILED
+        return self
+
+    def try_install(self) -> "Dependency":
+        """
+        仅执行 silent 类安装。needs_ai 类由 AI 触发，不在此执行。
+        """
+        if self.status != DepStatus.INSTALLABLE:
+            return self
+        if not self.install_fn:
+            return self
+        # needs_ai 类不在这儿执行，留给 AI
+        if self.install_category == "needs_ai":
+            return self
+        try:
+            print(f"\n📦 正在安装 {self.name}...")
+            self.install_fn()
+            self.check()
+            if self.status == DepStatus.OK:
+                print(f"✅ {self.name} 安装成功")
+            else:
+                print(f"❌ {self.name} 安装失败: {self.error}")
+        except Exception as e:
+            self.error = str(e)
+            self.status = DepStatus.FAILED
+            print(f"❌ {self.name} 自动安装失败: {e}")
+        return self
+
+    def status_icon(self) -> str:
+        if self.status == DepStatus.OK:
+            return "🟢"
+        elif self.status == DepStatus.INSTALLABLE:
+            return "🔴"
+        elif self.status == DepStatus.MISSING:
+            return "🔴"
+        else:
+            return "🟡"
+
+
+# ---- 各依赖检测函数 ----
+
+def _check_openclaw_cli():
+    openclaw_path = RuntimeLLM._find_openclaw()
+    result = subprocess.run(
+        [openclaw_path, "gateway", "status", "--deep"],
+        capture_output=True, text=True, timeout=15
+    )
+    if result.returncode != 0:
+        raise RuntimeError("gateway not responding")
+    return True
+
+
+def _check_python_docx():
+    import docx
+    return True
+
+
+def _check_hermes():
+    result = subprocess.run(
+        ["hermes", "--version"],
+        capture_output=True, text=True, timeout=10
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr or "not found")
+    return result.stdout.strip()
+
+
+def _install_hermes():
+    # 优先用 pipx，其次 pip
+    for cmd in [["pipx", "install", "hermes-ai"], ["pip", "install", "hermes-ai"]]:
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if r.returncode == 0:
+                return
+        except Exception:
+            continue
+    raise RuntimeError("pipx/pip 安装均失败，请手动安装 hermes-ai")
+
+
+def _check_tavily_mcp():
+    result = subprocess.run(
+        ["mcporter", "call", "tavily-mcp.tavily_search",
+         '{"query":"test","max_results":1}'],
+        capture_output=True, text=True, timeout=20
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr or "tavily-mcp not available")
+    # 验证返回数据
+    data = json.loads(result.stdout)
+    if "error" in data:
+        raise RuntimeError(data["error"])
+    return True
+
+
+def _install_tavily_mcp():
+    r = subprocess.run(
+        ["mcp", "install", "tavily-mcp"],
+        capture_output=True, text=True, timeout=60
+    )
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr or "mcp install failed")
+
+
+def _check_mineru():
+    import importlib
+    m = importlib.import_module("mineru_open_api")
+    return getattr(m, "__version__", "unknown")
+
+
+def _install_mineru():
+    r = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "mineru-open-api>=0.5.0"],
+        capture_output=True, text=True, timeout=120
+    )
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr or "pip install failed")
+
+
+def _check_skill(name: str):
+    """检查 skill 是否已安装"""
+    openclaw_path = RuntimeLLM._find_openclaw()
+    result = subprocess.run(
+        [openclaw_path, "skills", "list", "--json"],
+        capture_output=True, text=True, timeout=10
+    )
+    if result.returncode != 0:
+        raise RuntimeError("openclaw skills list failed")
+    data = json.loads(result.stdout)
+    installed = [s.get("name") for s in data.get("skills", [])]
+    if name not in installed:
+        raise RuntimeError(f"skill '{name}' not installed")
+    return True
+
+
+def _install_skill(name: str):
+    openclaw_path = RuntimeLLM._find_openclaw()
+    r = subprocess.run(
+        [openclaw_path, "skills", "install", name],
+        capture_output=True, text=True, timeout=60
+    )
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr or "install failed")
+
+
+def _install_python_pkg(cmd: list):
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr or "pip install failed")
+
+
+# ---- Pre-flight Check 主函数 ----
+
+def preflight_check(skip_install: bool = False) -> Tuple[bool, list, list]:
+    """
+    执行所有依赖检测。
+
+    - silent 类依赖：自动安装
+    - needs_ai 类依赖：返回 needs_ai_deps，由 AI 触发安装
+
+    返回 (can_proceed, deps_list, needs_ai_deps)
+    """
+    deps = [
+        # P0: 必需环境
+        Dependency(
+            "OpenClaw CLI", _check_openclaw_cli,
+            required=True, block_on_fail=True,
+            description="RuntimeLLM 和 Skill 管理依赖"
+        ),
+        Dependency(
+            "python-docx", _check_python_docx,
+            install_fn=lambda: _install_python_pkg(
+                [sys.executable, "-m", "pip", "install", "python-docx"]
+            ),
+            required=True, block_on_fail=True,
+            description="Word 文档读写"
+        ),
+
+        # P1: 建议安装（可降级）
+        Dependency(
+            "Hermes CLI", _check_hermes,
+            install_cmd="pipx install hermes-ai  或  pip install hermes-ai",
+            install_fn=_install_hermes,
+            required=False, block_on_fail=False,
+            description="版本H起草引擎（深度逻辑链），可降级到版本O",
+            install_category="silent"
+        ),
+        Dependency(
+            "Tavily MCP", _check_tavily_mcp,
+            install_cmd="mcp install tavily-mcp",
+            install_fn=_install_tavily_mcp,
+            required=False, block_on_fail=False,
+            description="网络搜索增强（可选，web_search 可替代）",
+            install_category="needs_ai"  # 可能有交互式确认
+        ),
+        Dependency(
+            "mineru-open-api", _check_mineru,
+            install_cmd="pip install mineru-open-api>=0.5.0",
+            install_fn=_install_mineru,
+            required=False, block_on_fail=False,
+            description="docx 解析增强（可选，降级到 python-docx）",
+            install_category="silent"
+        ),
+
+        # P2: Skill（可选）
+        Dependency(
+            "academic-research (Skill)",
+            lambda: _check_skill("academic-research"),
+            install_cmd="openclaw skills install academic-research",
+            install_fn=lambda: _install_skill("academic-research"),
+            required=False, block_on_fail=False,
+            description="学术文献检索",
+            install_category="needs_ai"  # skill 安装需 AI 确认
+        ),
+        Dependency(
+            "arxiv-search-collector (Skill)",
+            lambda: _check_skill("arxiv-search-collector"),
+            install_cmd="openclaw skills install arxiv-search-collector",
+            install_fn=lambda: _install_skill("arxiv-search-collector"),
+            required=False, block_on_fail=False,
+            description="前沿论文追踪",
+            install_category="needs_ai"  # skill 安装需 AI 确认
+        ),
+    ]
+
+    # 执行检测
+    print("\n" + "=" * 60)
+    print("🔍 Pre-flight Check：依赖检测")
+    print("=" * 60)
+
+    for dep in deps:
+        dep.check()
+        icon = dep.status_icon()
+        req_tag = " [必须]" if dep.required else ""
+        if dep.status == DepStatus.OK:
+            version_info = f" ({dep.version})" if dep.version else ""
+            print(f"  {icon} {dep.name}{version_info}{req_tag}")
+        elif dep.status == DepStatus.INSTALLABLE:
+            print(f"  {icon} {dep.name}{req_tag} — 可自动安装")
+            print(f"     安装命令: {dep.install_cmd}")
+        elif dep.status == DepStatus.MISSING:
+            print(f"  {icon} {dep.name}{req_tag} — 缺失")
+        else:
+            print(f"  {icon} {dep.name} — 检测失败（{dep.error[:40]}）")
+
+    # 统计
+    missing_required = [d for d in deps if d.required and d.status != DepStatus.OK]
+    installable = [d for d in deps if d.status == DepStatus.INSTALLABLE]
+
+    print()
+
+    # 统计
+    missing_required = [d for d in deps if d.required and d.status != DepStatus.OK]
+    installable_silent = [d for d in deps if d.status == DepStatus.INSTALLABLE and d.install_category == "silent"]
+    installable_ai = [d for d in deps if d.status == DepStatus.INSTALLABLE and d.install_category == "needs_ai"]
+
+    print()
+
+    # silent 类：自动安装
+    if installable_silent and not skip_install:
+        print(f"📦 尝试自动安装 {len(installable_silent)} 个依赖...")
+        for dep in installable_silent:
+            dep.try_install()
+            icon = dep.status_icon()
+            if dep.status == DepStatus.OK:
+                print(f"  {icon} {dep.name} ✅ 已安装")
+            else:
+                print(f"  {icon} {dep.name} ❌ 安装失败（{dep.error[:40]}）")
+        print()
+
+    # needs_ai 类：返回给 AI 触发（不在这儿执行）
+    if installable_ai:
+        print(f"🤖 以下 {len(installable_ai)} 个依赖需要 AI 触发安装：")
+        for d in installable_ai:
+            print(f"   🔸 {d.name}: {d.install_cmd}")
+        print()
+
+    # 最终判断
+    failed_required = [d for d in deps if d.required and d.status != DepStatus.OK]
+    if failed_required:
+        names = ", ".join(d.name for d in failed_required)
+        print(f"❌ Pre-flight 失败：缺少必须依赖 {names}")
+        print("   请手动安装后重试")
+        return False, deps
+
+    # 最终判断
+    failed_required = [d for d in deps if d.required and d.status != DepStatus.OK]
+    if failed_required:
+        names = ", ".join(d.name for d in failed_required)
+        print(f"❌ Pre-flight 失败：缺少必须依赖 {names}")
+        print("   请手动安装后重试")
+        return False, deps, []
+
+    # 重新统计（安装后可能有些变成了 OK）
+    still_installable = [d for d in deps if d.status == DepStatus.INSTALLABLE]
+    needs_ai_deps = [d for d in still_installable if d.install_category == "needs_ai"]
+
+    if needs_ai_deps:
+        print(f"🤖 以下依赖需要 AI 触发安装：")
+        for d in needs_ai_deps:
+            print(f"   🔸 {d.name}: {d.install_cmd}")
+        print()
+
+    if installable_silent and not skip_install:
+        still_failed = [d for d in installable_silent if d.status != DepStatus.OK]
+        if still_failed:
+            print(f"🟡 以下依赖自动安装失败，可降级使用：")
+            for d in still_failed:
+                print(f"   - {d.name}: {d.install_cmd}")
+            print()
+
+    print("✅ Pre-flight Check 通过")
+    return True, deps, needs_ai_deps
 
 
 # ============================================================
@@ -475,7 +1087,9 @@ def main():
     parser.add_argument("--phase", choices=["phase1", "phase2", "phase3", "auto"],
                        default="auto", help="指定阶段")
     parser.add_argument("--status", action="store_true", help="仅查看状态")
-    parser.add_argument("--llm", help="LLM 调用函数（暂未实现交互式注入，留给 Phase 2 集成）")
+    parser.add_argument("--llm", help="指定 LLM 模型（留空则自动从当前 session 获取）")
+    parser.add_argument("--agent-id", default=None,
+                       help="agent ID（留空则从当前 session 自动推断，仅用于多 agent 场景）")
     args = parser.parse_args()
 
     paper_name = args.paper_name
@@ -484,18 +1098,78 @@ def main():
     print(f"  论文: {paper_name}")
     print(f"  模式: {args.phase}")
 
+    # ── Pre-flight Check ──────────────────────────────────────
+    can_proceed, deps, needs_ai_deps = preflight_check()
+    if not can_proceed:
+        return 1
+
+    # needs_ai 类依赖：打印安装指令，由调用方 AI 触发
+    if needs_ai_deps:
+        print()
+        print("=" * 60)
+        print("🤖 需要 AI 触发安装以下依赖：")
+        print("=" * 60)
+        for d in needs_ai_deps:
+            print(f"  🔸 {d.name}")
+            print(f"     命令: {d.install_cmd}")
+        print()
+        print("请在 OpenClaw 主 session 中执行安装命令后，再运行本脚本。")
+        print("=" * 60)
+        return 2  # 返回特殊码，告知调用方需要 AI 介入
+
     if args.status:
         get_paper_status(paper_name)
         return 0
 
-    llm_func = None  # 默认 None，Phase 2 必传
-    if args.phase in ("phase2", "auto"):
-        if not args.llm:
-            print("⚠️ Phase 2 需要 llm_func")
-            print("   当前实现：run_workflow.py 通过 stdin 与用户交互")
-            print("   LLM 注入暂未实现（v2.0.6 + 后续 milestone）")
-            print("   如需 Phase 2，请用 Python API 调用 orchestrate_phase2()")
+    llm_func = None
+
+    if args.phase in ("phase1", "auto"):
+        # Phase 1.3 需要 llm_func
+        try:
+            rllm = get_runtime_llm()
+            if args.llm:
+                # 用户指定了模型
+                model = args.llm
+                llm_func = rllm.make_llm_func(model=model)
+                print(f"✅ 使用指定模型: {model}")
+            else:
+                # 自动从当前 session 获取
+                model = rllm.current_model()
+                llm_func = rllm.make_llm_func()
+                print(f"✅ 自动使用当前 session 模型: {model}")
+        except Exception as e:
+            print()
+            print("=" * 60)
+            print("❌ 无法获取运行中 session 配置（Phase 1.3 需要 llm_func）")
+            print("=" * 60)
+            print(f"   错误: {e}")
+            print()
+            print("解决方案：")
+            print("   1. 确保从 OpenClaw session 内调用本脚本（自动获取配置）")
+            print("   2. 或通过 --llm 参数指定模型：")
+            print("      python3 scripts/run_workflow.py <paper> --phase phase1 \\")
+            print("        --llm MiniMax-M2.7")
+            print()
             return 1
+
+    if args.phase in ("phase2", "auto"):
+        # Phase 2 llm_func：优先用 --llm 指定模型，否则自动从 session 获取
+        if not llm_func:
+            if args.llm:
+                # 用户指定了模型名
+                llm_func = get_runtime_llm().make_llm_func(model=args.llm)
+                print(f"✅ 使用指定模型: {args.llm}")
+            else:
+                # 自动从 session 获取
+                try:
+                    rllm = get_runtime_llm()
+                    model = rllm.current_model()
+                    llm_func = rllm.make_llm_func()
+                    print(f"✅ 自动使用当前 session 模型: {model}")
+                except Exception as e:
+                    print(f"❌ Phase 2 需要 llm_func，但无法获取 session 配置: {e}")
+                    print("   请用 --llm 参数指定模型，或从 OpenClaw session 内调用")
+                    return 1
 
     # 按 phase 执行
     if args.phase in ("phase1", "auto"):

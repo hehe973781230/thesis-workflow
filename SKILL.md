@@ -1,7 +1,7 @@
 ---
 name: thesis-workflow-v2
-version: 2.0.6
-description: "v2 新框架：多Agent协作完成MBA/学术论文写作的完整工作流。v2 重构为 outline-anchored 设计 + 9 HIL 节点 + 真实 CLI 入口。⚠️ 测试版，需独立安装（不覆盖 v1）。"
+version: 2.0.8-beta
+description: "v2 新框架（beta）：multi-search并行引擎 + RuntimeLLM零硬编码。v2 重构为 outline-anchored 设计 + 9 HIL 节点 + 真实 CLI 入口。⚠️ 测试版，需独立安装（不覆盖 v1）。"
 metadata:
   clawdbot:
     emoji: "📝"
@@ -66,13 +66,40 @@ Phase 1（规划）→ Phase 2（双版本起草）→ Phase 2.5（用户确认�
 2. Subagent 用 `sessions_send` 向主 session 发送同步
 3. 大型检索完成后输出结构化结果摘要
 
-### 数据查询工具
+### 数据查询工具（v2 多工具并行策略）
 
-| 工具 | 场景 | 调用 |
-|------|------|------|
-| `web_search` | 行业数据/市场规模/企业信息 | 直接描述搜索需求 |
-| `academic-research` | 学术文献/引用分析 | `python3 scripts/scholar-search.py search "关键词"` |
-| `arxiv-search-collector` | 前沿论文追踪 | 初始化后批量抓取 |
+> **核心原则**：4个工具并行发出，取长补短，去重排序，任意失败不阻断。
+> `web_search` 等内置工具 Agent 直接调用，无需经过 Python 层包装。
+
+**工具矩阵：**
+
+| 工具 | 来源 | 适用场景 |
+|------|------|---------|
+| `web_search` | OpenClaw 内置（头条搜索） | 行业数据、市场规模、新闻动态 |
+| `tavily_search` | Tavily MCP（mcporter） | 结构化摘要、权威来源 |
+| `arxiv_search` | arXiv MCP（mcporter） | 前沿学术论文、技术细节 |
+| `openalex_search` | scholar-search.py（OpenAlex） | 学术文献、引用分析 |
+
+**Python 层调用（`research_tools.py`）：**
+```python
+from research_tools import quick_search, research_enrich
+
+# 快速检索（返回文本，供注入 prompt）
+result = quick_search("竞争战略 市场规模 2024")
+
+# 节点级检索（自动取 outline 中的 research_keywords）
+ctx = research_enrich(node_id, paper_name)
+```
+
+**并行执行逻辑：**
+1. 四工具同时发出，不串行等待
+2. 各工具独立降级（超时/失败 → 静默忽略）
+3. 结果按 URL 去重 + score 排序
+4. 输出格式：`[来源] 标题\n  摘要\n  URL`
+
+**Agent 视角：**
+- Agent 可继续直接使用 `web_search(query=...)` 等内置工具
+- `quick_search()` 是 Python 层的补充，用于学术/论文场景的结构化检索
 
 ## Phase 详解
 
@@ -99,10 +126,11 @@ Phase 1（规划）→ Phase 2（双版本起草）→ Phase 2.5（用户确认�
 | 第3/4/5/6章 | ✅ 必须 | ✅ 必须（核心章节双版本对比） |
 
 **Phase 2 强制检索要求**（关键词中的 `{论文主题行业}` 由 Orchestrator 自动提取）：
-- 第3章 PESTEL 分析前 → 搜索「{论文主题行业} 市场规模/趋势/政策」
-- 第3章 五力模型分析前 → 搜索「{论文主题行业} 主要竞争对手/市场份额」
-- 战略理论部分 → 搜索「{论文主题行业} 竞争战略 应用」
+- 第3章 PESTEL 分析前 → 多工具并行搜索「{论文主题行业} 市场规模/趋势/政策」
+- 第3章 五力模型分析前 → 多工具并行搜索「{论文主题行业} 主要竞争对手/市场份额」
+- 战略理论部分 → 多工具并行搜索「{论文主题行业} 竞争战略 应用」
 - 每章至少 1 个引用标注来源，全文检索记录 ≥ 3 次
+- **多工具并行检索**：调用 `quick_search()` 或 `research_enrich()`，结果自动去重排序
 
 **输出物：** 版本O文件（第1-7章全部）+ 版本H文件（第3-6章全部）
 **状态文件机制：** `{论文名}_任务状态.json`（见 `scripts/state_manager.py`）

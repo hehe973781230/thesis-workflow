@@ -1,7 +1,7 @@
 # CHANGELOG - v2.x 新框架
 
 > v2.x 是 **v2 框架**（outline-anchored 重构 + 9 HIL 节点 + 真实 CLI 入口）的活跃开发分支。
-> 当前 latest: **v2.0.6**
+> 当前 latest: **v2.0.8-beta**
 > ClawHub Slug: `thesis-workflow-v2`（独立仓库）
 > 详见 [CHANGELOG.md](./CHANGELOG.md) 的版本线索引。
 
@@ -14,9 +14,104 @@ v1.7.4 / v1.7.5 / v1.7.6 / v1.7.7 **实际为 v2 框架的早期 alpha 开发**�
 - v1.7.6 = v2 早期 alpha-3
 - v1.7.7 = v2 早期 alpha-4
 - v2.0.0 = v2 正式发布
-- v2.0.6 = v2 当前 latest
+- v2.0.6 = v2 上一稳定版
+- v2.0.7 = v2 上一版本
+- v2.0.8-beta = v2 当前 latest
 
 **Commit hash 已保留，可在 git history 中追溯。**
+
+## [v2.0.8-beta] - 2026-06-25
+
+### 🚀 多工具并行检索引擎（#2）
+
+**4 工具并行，取长补短，去重排序，任意失败不阻断。**
+
+#### 新增文件
+
+- **`scripts/multi_search.py`**（339行）：4工具并行检索引擎
+  - `multi_search(query)`：ThreadPoolExecutor 并发，Tavily + arXiv + OpenAlex + web_search 同时搜索
+  - `SearchResult` dataclass：title/url/snippet/source/score 标准化
+  - 去重规则：同来源+同标题→去重，不同来源+同标题→保留
+  - `multi_search_text(query)`：格式化文本输出（供 prompt 注入）
+  - CLI 入口：`python3 multi_search.py <查询词>`
+
+- **`scripts/research_tools.py`**（139行，替换旧版单Tavily）：
+  - `quick_search(query)` → 直接调 multi_search_text()
+  - `research_enrich(node_id, paper_name)` → outline贫瘠(<50字)自动触发多工具补充
+  - `research_enrich_from_outline()` → 纯 outline 提取（无网络依赖）
+  - 降级：网络不可用/全部无结果 → 返回空白，不阻塞写作
+
+#### 扩展文件
+
+- **`SKILL.md`**：工具矩阵（web_search/tavily/arxiv/openalex）+ Python层调用说明 + 并行逻辑
+- **Phase 2 检索要求**：PESTEL/五力/竞争对手搜索要求更新为「多工具并行搜索」
+
+### 🤖 RuntimeLLM — 零硬编码模型获取（#3）
+
+- **`scripts/run_workflow.py`**：新增 `RuntimeLLM` 类
+  - 动态从 `openclaw sessions list --all-agents --active 30 --json` 获取当前 session 模型名 + provider
+  - 自动查找 openclaw CLI 路径（nvm / PATH）
+  - 零硬编码 agent_id / model / API key
+  - 支持 OpenAI / Anthropic / DashScope 等兼容 API
+  - 内置自动重试（3次）+ 超时处理
+
+#### 代码统计
+
+| 类型 | 文件 | 行数 |
+|------|------|------|
+| 新增 | `scripts/multi_search.py` | 339 |
+| 改造 | `scripts/research_tools.py` | 139 |
+| 改造 | `scripts/run_workflow.py` (RuntimeLLM) | 683 |
+| 改造 | `SKILL.md` | 46 |
+| 改造 | `CHANGELOG-v2.md` | 50 |
+| 新增测试 | tests/ | 497+ |
+
+---
+
+## [v2.0.7] - 2026-06-25
+
+### outline_parser 引擎切换 B→A 单向降级（#1）
+
+F1-F5 决策拍板（龙哥 2026-06-25 确认）：
+- F1 弹窗 = **否**：用户静默，不调 warnings.warn
+- F2 audit = **是**：降级事件写 state.audit_log
+- F3 重试 = **1 次**：MinerU 失败 1 次立即降级
+- F4 作用域 = **进程级**：_fallback_used 是模块全局
+- F5 跨 paper = **共享**：跨 paper 共享 _fallback_used
+
+降级语义：**B (MinerU) → A (heuristic)，A 失败不回 B（单向）**
+
+#### 代码变更
+
+- **`outline_parser.py`**（新增 6 函数 + 重构 1 函数）：
+  - `reset_fallback_state()`：重置模块级状态（测试用 + 进程重启模拟）
+  - `_is_mineru_available()`：一次性缓存检测 mineru-open-api CLI 是否在 PATH（F4 进程级缓存）
+  - `_log_fallback_to_audit()`：stdout + state.audit_log 双通道记录降级事件（F2=是，F1=否 不弹窗）
+  - `_preprocess_paragraphs()`：段落预合并 4 规则（纯数字+.X / X.Y+标题 / 第N章+标题 / .X.Y+标题）
+  - `_strip_markdown_bold()`：清理 MinerU 输出的 markdown 加粗/heading 标记
+  - `extract_outline_from_docx_with_heuristic()`：**A 路径**：python-docx + 预合并 + 锚点解析
+  - `extract_outline_from_docx_via_mineru()`：**B 路径**：调用 mineru-open-api CLI，解析输出 md
+  - `extract_outline_from_docx()`：**统一入口**：F1-F5 决策逻辑，B→A 单向降级
+- **`outline_parser.py` 模块级状态**（F4+F5 落地）：
+  - `_mineru_check_done`、`_mineru_available`、`_fallback_used`
+
+#### 测试覆盖（25 个测试用例）
+
+- `test_outline_engine_fallback.py`（v2.0.7 新增，25 个测试）：
+  - 模块状态初始化 / reset 幂等 / cache 行为 / reset 后重新检测（4）
+  - A 路径：独立可用 / 处理拆段 / 预合并 4 规则 / 无锚点报错（4）
+  - F1=否：不弹窗（1）
+  - F2=是：降级写 audit / 成功不写 / stdout 含 AUDIT 标记（3）
+  - F3=1：单次重试（1）
+  - F4=进程级：降级锁死后续调用（1）
+  - F5=共享：跨 paper 全局（1）
+  - B→A 单向：降级不回 B（1）
+  - B 路径自身：unavailable 抛错 / subprocess 调用 / nonzero 返回 / 无 md 输出（4）
+  - 完整降级链路集成（1）
+  - _strip_markdown_bold 工具函数（1）
+  - 向后兼容：签名不变 / text 路径 / outline_parse API（3）
+
+**总测试数**：172 (v2.0.6) + **25** (v2.0.7) = **197 个**，0 个破坏
 
 ## [v2.0.6] - 2026-06-24
 
