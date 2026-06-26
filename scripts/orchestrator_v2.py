@@ -16,6 +16,7 @@ orchestrator_v2.py - 论文写作流程编排器 v1.0
 
 import json
 import os
+import re
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -1092,6 +1093,44 @@ def confirm_phase3_and_export(paper_name: str) -> Dict[str, Any]:
 # ============================================================
 # Phase 3.5：深度学术评审
 # ============================================================
+
+
+def _split_by_chapter(content: str) -> Dict[str, str]:
+    """按章节标题拆分论文，返回 {chapter_id: content}"""
+    # 匹配 # 第X章 ... 标题行到下一个 # 第X章 或文档末尾
+    pattern = r'^(#\s*第[1-7]章[^\n]*)(?=\n#+[^\n]|$)'
+    matches = list(re.finditer(pattern, content, re.MULTILINE))
+
+    chapters = {}
+    for i, match in enumerate(matches):
+        chapter_header = match.group(1).strip()
+        # 提取章节号作为 key
+        ch_num_match = re.match(r'#\s*(第[1-7]章)', chapter_header)
+        if not ch_num_match:
+            continue
+        chapter_id = ch_num_match.group(1)
+        # 内容从标题行末尾到下一章标题之前
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+        chapter_content = content[start:end].strip()
+        chapters[chapter_id] = f"{chapter_header}\n\n{chapter_content}"
+
+    return chapters
+
+
+def _parse_review_json(response: str) -> Dict[str, Any]:
+    """从 LLM 响应中解析 JSON 评审结果"""
+    import re
+    json_match = re.search(r'\{.*\}', response, re.DOTALL)
+    if json_match:
+        try:
+            return json.loads(json_match.group(0))
+        except json.JSONDecodeError:
+            pass
+    return {"p0": [], "p1": [], "p2": [], "summary": "解析失败，请重试"}
+
+
+
 # 对 Phase 3 整合版做二次审查，输出 P0/P1/P2 分级问题清单
 # ============================================================
 
@@ -1131,9 +1170,14 @@ def orchestrate_phase3_5(paper_name: str,
 
     full_content = "\n\n".join(sections)
 
-    # 调用 LLM 做深度评审（或 sessions_spawn subagent）
+    # 逐章深度评审（修复 8000 字截断 Bug）
     if llm_func:
-        prompt = f"""你是一位学术论文评审专家。请对以下论文进行深度学术评审。
+        all_p0, all_p1, all_p2 = [], [], []
+        chapter_summaries = []
+
+        chapters = _split_by_chapter(full_content)
+        for chapter_id, chapter_text in chapters.items():
+            chapter_prompt = f"""你是一位学术论文评审专家。请对以下论文的第 {chapter_id} 进行深度学术评审。
 
 评审维度：
 1. 理论框架是否完整、逻辑一致
@@ -1148,31 +1192,37 @@ def orchestrate_phase3_5(paper_name: str,
 - P1（重要）：建议修复（引用不充分、表述不清晰、结构可优化）
 - P2（轻微）：可选项（格式微调、措辞润色）
 
-论文内容：
+章节内容：
 ---
-{full_content[:8000]}
+{chapter_text}
 ---
-（全文共 {len(full_content)} 字，以上为节选前 8000 字）
 
 以 JSON 格式输出：
 {{
-  "p0": [{{"node_id": "...", "issue": "...", "severity": "p0"}}],
+  "p0": [{{"node_id": "{chapter_id}", "issue": "...", "severity": "p0"}}],
   "p1": [...],
   "p2": [...],
-  "summary": "总体评价（50字以内）"
+  "summary": "本章评价（50字以内）"
 }}
 只输出 JSON。"""
 
-        try:
-            response = llm_func(prompt)
-            import json, re
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                review_result = json.loads(json_match.group(0))
-            else:
-                review_result = {"p0": [], "p1": [], "p2": [], "summary": "解析失败，请重试"}
-        except Exception as e:
-            review_result = {"p0": [], "p1": [], "p2": [], "summary": f"评审异常: {e}"}
+            try:
+                response = llm_func(chapter_prompt)
+                chapter_result = _parse_review_json(response)
+                all_p0.extend(chapter_result.get("p0", []))
+                all_p1.extend(chapter_result.get("p1", []))
+                all_p2.extend(chapter_result.get("p2", []))
+                if chapter_result.get("summary"):
+                    chapter_summaries.append(f"{chapter_id}：{chapter_result['summary']}")
+            except Exception as e:
+                pass  # 单章失败不影响其他章节
+
+        review_result = {
+            "p0": all_p0,
+            "p1": all_p1,
+            "p2": all_p2,
+            "summary": "; ".join(chapter_summaries) if chapter_summaries else "逐章评审完成"
+        }
     else:
         review_result = {"p0": [], "p1": [], "p2": [], "summary": "未提供 llm_func，跳过深度评审"}
 

@@ -9,7 +9,10 @@ import os
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
-WORKSPACE = os.path.expanduser("~/.openclaw/workspace")
+WORKSPACE = os.environ.get(
+    "THESIS_WORKSPACE",
+    os.path.expanduser("~/.openclaw/workspace")
+)
 
 
 def _get_paper_dir(paper_name: str) -> str:

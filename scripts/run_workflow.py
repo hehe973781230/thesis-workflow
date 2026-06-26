@@ -15,6 +15,7 @@ P0-2 + P0-3 修复：补 v2 真实入口
 """
 
 import argparse
+import io
 import json
 import os
 import subprocess
@@ -33,13 +34,33 @@ from orchestrator_v2 import (
     confirm_phase1_3, write_single_node, apply_user_decision,
     check_info_scarcity, confirm_phase1, skip_phase1_3
 )
+
+
+# ==================== Windows UTF-8 兼容 ====================
+
+def _ensure_utf8_stdout():
+    """修复 Windows GBK 编码问题"""
+    if sys.platform == 'win32':
+        sys.stdout = io.TextIOWrapper(
+            sys.stdout.buffer,
+            encoding='utf-8',
+            errors='replace'
+        )
+        sys.stderr = io.TextIOWrapper(
+            sys.stderr.buffer,
+            encoding='utf-8',
+            errors='replace'
+        )
 from state_manager_v2 import (
     load_orchestrate_state, save_orchestrate_state,
     outline_load, outline_get_node, init_orchestrate_state
 )
 from node_writer import write_node, extract_key_conclusion_from_response
 
-WORKSPACE = Path(os.path.expanduser("~/.openclaw/workspace"))
+WORKSPACE = Path(os.environ.get(
+    "THESIS_WORKSPACE",
+    os.path.expanduser("~/.openclaw/workspace")
+))
 
 
 # ============================================================
@@ -379,6 +400,9 @@ class Dependency:
 # ---- 各依赖检测函数 ----
 
 def _check_openclaw_cli():
+    # 环境变量 THESIS_SKIP_CLI_CHECK=1 时跳过 OpenClaw CLI 检测
+    if os.environ.get("THESIS_SKIP_CLI_CHECK") == "1":
+        return True
     openclaw_path = RuntimeLLM._find_openclaw()
     result = subprocess.run(
         [openclaw_path, "gateway", "status", "--deep"],
@@ -1189,4 +1213,5 @@ def main():
 
 
 if __name__ == "__main__":
+    _ensure_utf8_stdout()
     sys.exit(main())

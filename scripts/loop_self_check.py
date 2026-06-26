@@ -36,6 +36,7 @@ v1.7 引入：Guardrails 自动化校验
 """
 
 import argparse
+import io
 import json
 import re
 import sys
@@ -48,6 +49,23 @@ DEFAULT_MIN_LINES_PER_CHAPTER = 100    # 每章最少行数
 DEFAULT_MIN_CITATIONS = 10             # 最少引用数
 DEFAULT_TOTAL_CHAPTERS = 7             # 论文总章数
 DEFAULT_MIN_CHARTS = 0                  # 最少图表数
+
+
+# ==================== Windows UTF-8 兼容 ====================
+
+def _ensure_utf8_stdout():
+    """修复 Windows GBK 编码问题：所有脚本入口必须调用"""
+    if sys.platform == 'win32':
+        sys.stdout = io.TextIOWrapper(
+            sys.stdout.buffer,
+            encoding='utf-8',
+            errors='replace'
+        )
+        sys.stderr = io.TextIOWrapper(
+            sys.stderr.buffer,
+            encoding='utf-8',
+            errors='replace'
+        )
 
 
 # ==================== 校验函数 ====================
@@ -583,4 +601,5 @@ def main():
 
 
 if __name__ == "__main__":
+    _ensure_utf8_stdout()
     main()
