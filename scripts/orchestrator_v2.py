@@ -17,6 +17,7 @@ orchestrator_v2.py - 论文写作流程编排器 v1.0
 import json
 import os
 import re
+import sys
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -1130,6 +1131,22 @@ def _parse_review_json(response: str) -> Dict[str, Any]:
     return {"p0": [], "p1": [], "p2": [], "summary": "解析失败，请重试"}
 
 
+def _normalize_issue_text(text: str) -> str:
+    """归一化问题文本用于去重：移除标点/空格/大小写"""
+    text = re.sub(r'[^\w\s]', '', text)
+    text = re.sub(r'\s+', '', text)
+    return text.lower()
+
+
+def _get_p0_signature(p0_list: List[Dict]) -> set:
+    """获取 P0 问题签名（node_id + 归一化文本前50字符）"""
+    signatures = set()
+    for item in p0_list:
+        node_id = item.get("node_id", "")
+        issue_text = _normalize_issue_text(item.get("issue", ""))[:50]
+        signatures.add(f"{node_id}:{issue_text}")
+    return signatures
+
 
 # 对 Phase 3 整合版做二次审查，输出 P0/P1/P2 分级问题清单
 # ============================================================
@@ -1237,12 +1254,12 @@ def orchestrate_phase3_5(paper_name: str,
     state["phase3_5_result"] = review_result
     state["phase3_5_status"] = "pending_review"
 
-    # 连续2轮无新P0检测
-    prev_p0_ids = set(
-        item.get("issue", "") for item in state.get("phase3_5_prev_result", {}).get("p0", [])
+    # 连续2轮无新P0检测（修复 P1-7：改用 node_id + 归一化文本签名）
+    prev_p0_sigs = _get_p0_signature(
+        state.get("phase3_5_prev_result", {}).get("p0", [])
     )
-    curr_p0_ids = set(item.get("issue", "") for item in review_result.get("p0", []))
-    new_p0 = curr_p0_ids - prev_p0_ids
+    curr_p0_sigs = _get_p0_signature(review_result.get("p0", []))
+    new_p0 = curr_p0_sigs - prev_p0_sigs
 
     if p0_count == 0 or not new_p0:
         # 无 P0 或 P0 没有新增 → HIL 接受
@@ -1364,6 +1381,23 @@ def orchestrate_phase4(paper_name: str,
     p0 = review_result.get("p0", [])
     p1 = review_result.get("p1", [])
 
+    # HIL #8：Phase 4 开始前检查 Phase 3.5 是否已通过
+    phase3_5_status = state.get("phase3_5_status", "")
+    if phase3_5_status != "passed":
+        p0_count = len(p0)
+        p1_count = len(p1)
+        print(f"\n⚠️ HIL #8: Phase 3.5 尚未通过，是否继续 Phase 4？")
+        print(f"  当前 P0={p0_count}, P1={p1_count}")
+        user_input = input("  继续执行 Phase 4？(y/N): ").strip().lower()
+        if user_input != 'y':
+            return {
+                "ok": False,
+                "blocked": "hil8_phase3_5_not_passed",
+                "p0": p0_count,
+                "p1": p1_count,
+                "message": f"HIL #8：Phase 3.5 未通过（当前 P0={p0_count}, P1={p1_count}），已暂停"
+            }
+
     # 自动修复 P0
     fix_result = {"fixed_p0": 0, "fixed_p1": 0}
     if p0 and llm_func:
@@ -1441,6 +1475,20 @@ def orchestrate_phase5(paper_name: str) -> Dict[str, Any]:
     state = load_orchestrate_state(paper_name)
     if not state:
         return {"ok": False, "error": "状态文件不存在"}
+
+    # HIL #9：Word 输出前最终审批
+    p0 = len(state.get("phase3_5_result", {}).get("p0", []))
+    p1 = len(state.get("phase3_5_result", {}).get("p1", []))
+    print(f"\n⚠️ HIL #9: Phase 5 Word 输出前最终审批")
+    print(f"  Phase 3.5 结果：P0={p0}, P1={p1}")
+    print(f"  即将导出最终版 Markdown 并生成 Word")
+    user_input = input("  确认导出？(y/N): ").strip().lower()
+    if user_input != 'y':
+        return {
+            "ok": False,
+            "blocked": "hil9_word_export_not_confirmed",
+            "message": "HIL #9：用户取消 Word 导出"
+        }
 
     # 运行 Guardrails 校验
     guardrails_result = {}

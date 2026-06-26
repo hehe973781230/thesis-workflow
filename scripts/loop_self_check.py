@@ -141,18 +141,31 @@ def check_inline_bold(content: str) -> Tuple[bool, str]:
 
 
 def check_citation_completeness(content: str, min_citations: int = DEFAULT_MIN_CITATIONS) -> Tuple[bool, str]:
-    """校验 6: 引用完整性 - 检测是否有 (作者，年份) 模式"""
-    # 中英文引用模式
+    """校验 6: 引用完整性 - 逐章检查，每章至少1处引用（修复 P1-9）"""
     cn_pattern = r'[（(][^)）]+[，,]\s*\d{4}[)）]'
     en_pattern = r'\([A-Z][a-zA-Z]+(?:\s+(?:and|&)\s+[A-Z][a-zA-Z]+)?,?\s*\d{4}\)'
-    
-    cn_citations = re.findall(cn_pattern, content)
-    en_citations = re.findall(en_pattern, content)
-    total = len(cn_citations) + len(en_citations)
-    
-    if total >= min_citations:
-        return True, f"✅ 引用完整性：找到 {total} 处引用标注（中 {len(cn_citations)} / 英 {len(en_citations)}）"
-    return False, f"❌ 引用完整性：仅 {total} 处引用（建议 ≥ {min_citations} 处）"
+
+    # 按章节拆分（第1-7章）
+    chapters = re.split(r'^#\s*第[1-7]章', content, flags=re.MULTILINE)
+
+    issues = []
+    total_citations = 0
+
+    for i, chapter_content in enumerate(chapters[1:], 1):
+        cn_citations = re.findall(cn_pattern, chapter_content)
+        en_citations = re.findall(en_pattern, chapter_content)
+        count = len(cn_citations) + len(en_citations)
+        total_citations += count
+        if count < 1:
+            issues.append(f"第{i}章(0处)")
+
+    if issues:
+        return False, f"❌ 引用完整性：以下章节无引用：{', '.join(issues)}"
+
+    if total_citations >= min_citations:
+        return True, f"✅ 引用完整性：全文 {total_citations} 处引用，每章 ≥ 1 处（中 {sum(len(re.findall(cn_pattern, ch)) for ch in chapters[1:])} / 英 {sum(len(re.findall(en_pattern, ch)) for ch in chapters[1:])})"
+
+    return False, f"❌ 引用完整性：全文仅 {total_citations} 处引用（需 ≥ {min_citations} 处）"
 
 
 def check_table_format(content: str) -> Tuple[bool, str]:
