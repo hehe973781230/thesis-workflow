@@ -1130,27 +1130,161 @@ def confirm_phase3_and_export(paper_name: str) -> Dict[str, Any]:
 # ============================================================
 
 
-def _split_by_chapter(content: str) -> Dict[str, str]:
-    """按章节标题拆分论文，返回 {chapter_id: content}"""
-    # 匹配 # 第X章 ... 标题行到下一个 # 第X章 或文档末尾
-    pattern = r'^(#\s*第[1-7]章[^\n]*)(?=\n#+[^\n]|$)'
-    matches = list(re.finditer(pattern, content, re.MULTILINE))
+# ============================================================
+# 辅助函数：基于大纲拆分论文正文
+# ============================================================
 
-    chapters = {}
-    for i, match in enumerate(matches):
-        chapter_header = match.group(1).strip()
-        # 提取章节号作为 key
-        ch_num_match = re.match(r'#\s*(第[1-7]章)', chapter_header)
-        if not ch_num_match:
-            continue
-        chapter_id = ch_num_match.group(1)
-        # 内容从标题行末尾到下一章标题之前
-        start = match.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
-        chapter_content = content[start:end].strip()
-        chapters[chapter_id] = f"{chapter_header}\n\n{chapter_content}"
+def _build_chapter_pattern(node_title: str) -> str:
+    """
+    根据大纲节点标题构造定位正则。
 
-    return chapters
+    "第1章 研究背景与意义"
+      → r'^#+\s*第1章[^\n]*研究背景[^\n]*'m
+
+    规则：
+      - 强制保留：章节号（第1-7章）
+      - 强制匹配：章节号后前8个非标点字符（核心关键词）
+      - 可选：剩余文字（允许正文标题略有不同）
+    """
+    # 提取章节号
+    num_match = re.search(r'第[1-7]章', node_title)
+    if not num_match:
+        return r'^#+\s*第[1-7]章'
+    chapter_num = num_match.group()
+
+    # 提取章节号后的文字，取前8个非标点字符作为关键词
+    after_num = node_title[len(chapter_num):].strip()
+    keywords = re.sub(r'[^\w\u4e00-\u9fff]', '', after_num)[:8]
+
+    if keywords:
+        return rf'^#+\s*{re.escape(chapter_num)}[^\n]*{re.escape(keywords)}[^\n]*'
+    else:
+        # 退化：只有章节号
+        return rf'^#+\s*{re.escape(chapter_num)}'
+
+
+def _split_by_chapter(
+    content: str,
+    outline_nodes: List[Dict]
+) -> Dict[str, Dict]:
+    """
+    基于大纲 level-1 节点拆分论文内容。
+
+    参数：
+      content:        完整论文 Markdown 字符串
+      outline_nodes:  outline_tree["nodes"] 列表
+
+    返回：
+      {
+        "ch1": {
+          "node_id":     "ch1",
+          "chapter_num": "第1章",
+          "title":       "第1章 研究背景与意义",
+          "content":      "## 1.1 研究背景\n...",
+          "matched":      True,     # 是否成功在正文中定位
+          "start_char":   0,
+          "end_char":     1523,
+        },
+        ...
+      }
+    """
+    import warnings
+
+    # Step 1：提取 level-1 节点，按 original_index 排序
+    level1_nodes = [
+        n for n in outline_nodes if n.get("level") == 1
+    ]
+    level1_nodes.sort(key=lambda x: x.get("original_index", 0))
+
+    if not level1_nodes:
+        # 退化：无可用大纲节点，回退到硬编码正则
+        warnings.warn("[_split_by_chapter] 无 level-1 节点，回退到硬编码正则拆分")
+        pattern = r'^(#\s*第[1-7]章[^\n]*)(?=\n#+[^\n]|$)'
+        matches = list(re.finditer(pattern, content, re.MULTILINE))
+        chapters = {}
+        for i, match in enumerate(matches):
+            ch_num_match = re.match(r'#\s*(第[1-7]章)', match.group(1).strip())
+            if not ch_num_match:
+                continue
+            chapter_id = ch_num_match.group(1)
+            start = match.end()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+            chapter_content = content[start:end].strip()
+            chapters[chapter_id] = {
+                "node_id": chapter_id, "chapter_num": chapter_id,
+                "title": match.group(1).strip(), "content": chapter_content,
+                "matched": True, "start_char": match.start(), "end_char": end
+            }
+        return chapters
+
+    # Step 2：构造每章在正文中的起止位置
+    result: Dict[str, Dict] = {}
+
+    for idx, node in enumerate(level1_nodes):
+        node_id = node["id"]
+        title = node.get("title", "")
+
+        # 构造本章正则
+        pattern_str = _build_chapter_pattern(title)
+        pattern = re.compile(pattern_str, re.MULTILINE)
+        match = pattern.search(content)
+
+        if match:
+            start_char = match.start()
+            # 找下一章的位置作为终点
+            end_char = None
+            for next_idx in range(idx + 1, len(level1_nodes)):
+                next_title = level1_nodes[next_idx].get("title", "")
+                next_pattern = re.compile(_build_chapter_pattern(next_title), re.MULTILINE)
+                next_match = next_pattern.search(content, start_char + 1)
+                if next_match:
+                    end_char = next_match.start()
+                    break
+            if end_char is None:
+                end_char = len(content)
+
+            # 内容 = 标题行之后到 end_char 之前
+            raw_content = content[match.end():end_char].strip()
+            # 重组：保留标题行 + 内容
+            chapter_content = f"{match.group().strip()}\n\n{raw_content}" if raw_content else match.group().strip()
+
+            result[node_id] = {
+                "node_id": node_id,
+                "chapter_num": re.search(r'第[1-7]章', title).group() if re.search(r'第[1-7]章', title) else "",
+                "title": title,
+                "content": chapter_content,
+                "matched": True,
+                "start_char": start_char,
+                "end_char": end_char,
+            }
+        else:
+            # 未匹配到：用前后章节位置推算，打印 warning
+            warnings.warn(
+                f"[_split_by_chapter] 节点 \"{node_id}\" 在正文中未找到标题行：{title}"
+            )
+            # 尝试估算位置
+            prev_end = result[level1_nodes[idx - 1]["id"]]["end_char"] if idx > 0 and level1_nodes[idx - 1]["id"] in result else 0
+            next_start = None
+            for next_idx in range(idx + 1, len(level1_nodes)):
+                next_title = level1_nodes[next_idx].get("title", "")
+                next_pattern = re.compile(_build_chapter_pattern(next_title), re.MULTILINE)
+                next_match = next_pattern.search(content, prev_end + 1)
+                if next_match:
+                    next_start = next_match.start()
+                    break
+            next_start = next_start or len(content)
+
+            result[node_id] = {
+                "node_id": node_id,
+                "chapter_num": re.search(r'第[1-7]章', title).group() if re.search(r'第[1-7]章', title) else "",
+                "title": title,
+                "content": "",
+                "matched": False,
+                "start_char": prev_end,
+                "end_char": next_start,
+            }
+
+    return result
 
 
 def _parse_review_json(response: str) -> Dict[str, Any]:
@@ -1226,9 +1360,10 @@ def orchestrate_phase3_5(paper_name: str,
         all_p0, all_p1, all_p2 = [], [], []
         chapter_summaries = []
 
-        chapters = _split_by_chapter(full_content)
-        for chapter_id, chapter_text in chapters.items():
-            chapter_prompt = f"""你是一位学术论文评审专家。请对以下论文的第 {chapter_id} 进行深度学术评审。
+        chapters = _split_by_chapter(full_content, nodes)
+        for node_id, chapter_info in chapters.items():
+            chapter_text = chapter_info["content"]
+            chapter_prompt = f"""你是一位学术论文评审专家。请对以下论文的第 {node_id} 进行深度学术评审。
 
 评审维度：
 1. 理论框架是否完整、逻辑一致
@@ -1250,7 +1385,7 @@ def orchestrate_phase3_5(paper_name: str,
 
 以 JSON 格式输出：
 {{
-  "p0": [{{"node_id": "{chapter_id}", "issue": "...", "severity": "p0"}}],
+  "p0": [{{"node_id": "{node_id}", "issue": "...", "severity": "p0"}}],
   "p1": [...],
   "p2": [...],
   "summary": "本章评价（50字以内）"
@@ -1264,7 +1399,7 @@ def orchestrate_phase3_5(paper_name: str,
                 all_p1.extend(chapter_result.get("p1", []))
                 all_p2.extend(chapter_result.get("p2", []))
                 if chapter_result.get("summary"):
-                    chapter_summaries.append(f"{chapter_id}：{chapter_result['summary']}")
+                    chapter_summaries.append(f"{node_id}：{chapter_result['summary']}")
             except Exception as e:
                 pass  # 单章失败不影响其他章节
 
