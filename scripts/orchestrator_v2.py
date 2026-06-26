@@ -451,11 +451,41 @@ def confirm_phase1_3(paper_name: str) -> Dict[str, Any]:
     state["phase1_3_confirmed_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
     state["phase"] = "phase2"
 
-    # 获取第一个节点
+    # 获取目录树（含节点层级结构）
     outline_state = outline_load(paper_name)
+    if not outline_state:
+        return {"ok": False, "error": "目录树未初始化"}
     nodes = outline_state["outline"]["outline_tree"]["nodes"]
     first_node = nodes[0] if nodes else None
     state["current_node_id"] = first_node["id"] if first_node else None
+
+    # 构建含归因信息的完整章节树（拍板标准：用户流转 Phase2 前必须能 check 所有节点）
+    node_details = state.get("phase1_3_result", {}).get("node_details", {})
+    chapter_tree = {}    # {level1_id: {title, sections: {level2_id: {...}}, subsections: {level3_id: {...}}}}
+    l2_to_l1 = {}  # 快速查找：level-2 node 所属的 level-1 node id
+    for n in outline_state["outline"]["outline_tree"]["nodes"]:
+        nid = n["id"]
+        nd = node_details.get(nid, {})
+        level = n.get("level", 1)
+        info = {
+            "title": n.get("title", ""),
+            "level": level,
+            "content_hint": nd.get("content_hint", ""),
+            "has_hint": nd.get("has_hint", False),
+            "matched_paragraphs_preview": nd.get("matched_paragraphs_preview", []),
+        }
+        if level == 1:
+            chapter_tree[nid] = {"title": info["title"], "sections": {}, "subsections": {}, **info}
+        elif level == 2:
+            parent = n.get("parent_id")
+            if parent and parent in chapter_tree:
+                chapter_tree[parent]["sections"][nid] = {"title": info["title"], **info}
+                l2_to_l1[nid] = parent
+        elif level == 3:
+            parent = n.get("parent_id")
+            l1_parent = l2_to_l1.get(parent) if parent else None
+            if l1_parent and l1_parent in chapter_tree:
+                chapter_tree[l1_parent]["subsections"][nid] = {"title": info["title"], **info}
 
     state["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
     save_orchestrate_state(paper_name, state)
@@ -464,8 +494,12 @@ def confirm_phase1_3(paper_name: str) -> Dict[str, Any]:
         "ok": True,
         "phase": "phase2",
         "phase1_3_status": "confirmed",
-        "current_node_id": state["current_node_id"],
-        "message": f"Phase 1.3 已确认，进入 Phase 2，当前节点：{state['current_node_id']}"
+        "current_node_id": first_node["id"] if first_node else None,
+        "node_details": node_details,
+        "chapter_tree": chapter_tree,  # 含归因信息的完整章节树
+        "summary": state.get("phase1_3_result", {}).get("summary", {}),
+        "message": f"Phase 1.3 已确认，进入 Phase 2。"
+               f"请核对下方章节树中每章/节/小节的 content_hint 是否与开题报告一致。"
     }
 
 
