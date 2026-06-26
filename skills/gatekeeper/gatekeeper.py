@@ -305,6 +305,158 @@ def generate_report(paper_name: str) -> str:
 
 
 # ============================================================
+# 常驻巡检 Daemon（增强版：支持 pending action 响应）
+# ============================================================
+
+def _pending_action_path(paper_name: str) -> Path:
+    return WORKSPACE / "papers" / paper_name / "_gk_pending_action.json"
+
+
+def _user_decision_path(paper_name: str) -> Path:
+    return WORKSPACE / "papers" / paper_name / "_gk_user_decision.json"
+
+
+def _write_user_decision(paper_name: str, decision: str, reason: str = "") -> None:
+    """写入用户决策，唤醒 Orchestrator"""
+    decision_path = _user_decision_path(paper_name)
+    decision_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(decision_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "decision": decision,
+            "reason": reason,
+            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+            "handled": True,
+        }, f, ensure_ascii=False, indent=2)
+
+
+def _format_pending_choices(exc_id: int, description: str) -> str:
+    """格式化用户选择菜单"""
+    return (
+        f"🤖 [Gatekeeper] 发现异常，请决策\n"
+        f"\n"
+        f"【异常 #{exc_id}】\n"
+        f"问题：{description}\n"
+        f"\n"
+        f"请选择：\n"
+        f"  [1] 修复后继续（打回重写）\n"
+        f"  [2] 跳过此检查（谨慎！）\n"
+        f"  [3] 暂停，手动介入\n"
+        f"\n"
+        f"请回复数字（1/2/3）"
+    )
+
+
+def _handle_pending_action(paper_name: str, action: Dict) -> None:
+    """
+    处理 Orchestrator 发来的 pending action。
+    
+    策略：
+      - blocking=True  → 立即触发质量检查，问用户决策，写入 _gk_user_decision.json
+      - blocking=False → 仅记录到日志，不阻塞
+    """
+    event = action.get("event", "")
+    phase = action.get("phase", "")
+    node_id = action.get("node_id", "")
+    details = action.get("details", {})
+    blocking = action.get("blocking", False)
+
+    if event in ("phase_complete", "node_write_complete", "quality_check", "export_ready"):
+        # 运行质量检查
+        issues = []
+        if event in ("node_write_complete", "export_ready"):
+            issues = check_quality_gate(paper_name)
+        if event == "phase_complete":
+            # Phase 边界：同时跑流程门禁 + 质量门禁
+            state_path = WORKSPACE / "papers" / paper_name / "_orchestrate_state.json"
+            if state_path.exists():
+                with open(state_path, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+                issues = check_process_gate(paper_name, state)
+            issues.extend(check_quality_gate(paper_name))
+
+        error_issues = [iss for iss in issues if iss.get("severity") == "error"]
+
+        if error_issues:
+            # 记录第一个错误到日志
+            first_issue = error_issues[0]
+            exc_id = add_exception(
+                paper_name=paper_name,
+                phase=phase,
+                node_id=node_id,
+                gate_type=first_issue.get("gate", "quality_gate"),
+                gate_name=first_issue.get("gate_name", ""),
+                description=first_issue["description"],
+                severity="error",
+            )
+            desc = first_issue["description"]
+            print(f"[GK] ⚠️ {event} @ {phase}/{node_id}: {desc}")
+
+            if blocking:
+                # 通知用户（打印到 stdout，由 sessions_send 转发）
+                msg = _format_pending_choices(exc_id, desc)
+                print(msg)
+                # Orchestrator 会读 _gk_user_decision.json，GK 在此等待用户通过飞书回复
+                # 用户回复后，decision 文件由 OpenClaw agent 写入
+                print(f"[GK] 等待用户决策（异常 #{exc_id}）...")
+                # 不在这里等，由 Orchestrator 轮询 _gk_user_decision.json
+
+        elif not blocking:
+            print(f"[GK] ✅ {event} @ {phase}/{node_id}: 门禁通过")
+
+
+def _run_daemon(paper_name: str, inspect_interval: int = 30) -> None:
+    """
+    Gatekeeper 常驻巡检 daemon。
+
+    - 监听 _gk_pending_action.json（Orchestrator 发来的事件）
+    - 定期巡检 _orchestrate_state.json（流程门禁）
+    - 所有异常写入 _gk_exception_log.json
+    """
+    print(f"Gatekeeper 启动，监听论文：{paper_name}")
+    print(f"巡检间隔：{inspect_interval} 秒，按 Ctrl+C 停止")
+    pending_path = _pending_action_path(paper_name)
+
+    try:
+        while True:
+            # 1. 检查是否有 pending action（Orchestrator 发来的事件）
+            if pending_path.exists():
+                try:
+                    with open(pending_path, "r", encoding="utf-8") as f:
+                        action = json.load(f)
+                    if not action.get("handled"):
+                        _handle_pending_action(paper_name, action)
+                        # 标记为已处理（由 Orchestrator 清理）
+                        # 这里只处理，不删除文件（避免 Orchestrator 收不到）
+                        action["handled"] = True
+                        with open(pending_path, "w", encoding="utf-8") as f:
+                            json.dump(action, f, ensure_ascii=False, indent=2)
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            # 2. 定期巡检（流程门禁，不依赖 pending action）
+            state_path = WORKSPACE / "papers" / paper_name / "_orchestrate_state.json"
+            if state_path.exists():
+                issues = inspect_state(paper_name)
+                for iss in issues:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ [{iss['gate']}] {iss['description']}")
+                    if iss.get("severity") == "error":
+                        add_exception(
+                            paper_name=paper_name,
+                            phase="",
+                            node_id="",
+                            gate_type=iss["gate"],
+                            gate_name=iss.get("gate_name", ""),
+                            description=iss["description"],
+                            severity="error",
+                        )
+
+            time.sleep(inspect_interval)
+
+    except KeyboardInterrupt:
+        print("\nGatekeeper 停止")
+
+
+# ============================================================
 # CLI 入口
 # ============================================================
 
@@ -350,30 +502,8 @@ def main():
             return 0
 
     elif args.mode == "daemon":
-        # 常驻巡检
-        print(f"Gatekeeper 启动，监听论文：{paper_name}")
-        print("每 30 秒巡检一次，按 Ctrl+C 停止")
-        try:
-            while True:
-                state_path = WORKSPACE / "papers" / paper_name / "_orchestrate_state.json"
-                if state_path.exists():
-                    issues = inspect_state(paper_name)
-                    for iss in issues:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ {iss['description']}")
-                        if iss.get("severity") == "error":
-                            add_exception(
-                                paper_name=paper_name,
-                                phase="",
-                                node_id="",
-                                gate_type=iss["gate"],
-                                gate_name="",
-                                description=iss["description"],
-                                severity=iss.get("severity", "error"),
-                            )
-                time.sleep(30)
-        except KeyboardInterrupt:
-            print("\nGatekeeper 停止")
-            return 0
+        _run_daemon(paper_name, inspect_interval=30)
+        return 0
 
     elif args.mode == "report":
         # 生成最终汇报

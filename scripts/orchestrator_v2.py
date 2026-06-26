@@ -37,6 +37,69 @@ from outline_parser import (
     outline_parse,
 )
 
+from gatekeeper_integration import (
+    notify_gatekeeper,
+    gk_enabled,
+    write_user_decision,
+    clear_pending,
+)
+
+
+# ============================================================
+# Gatekeeper 辅助
+# ============================================================
+
+def _gk_notify(paper_name: str, event: str, phase: str, node_id: str = "",
+               details: dict = None, blocking: bool = False) -> dict:
+    """
+    Orchestrator → Gatekeeper 的统一通知入口。
+
+    - GK 未启用时：直接返回 {"ok": True, "gk_disabled": True}
+    - blocking=True：等待用户决策（通过 _gk_user_decision.json）
+    """
+    if not gk_enabled(paper_name):
+        return {"ok": True, "gk_disabled": True}
+    return notify_gatekeeper(
+        paper_name=paper_name,
+        event=event,
+        phase=phase,
+        node_id=node_id,
+        details=details or {},
+        blocking=blocking,
+    )
+
+
+def enable_gatekeeper(paper_name: str, gk_session: str = "") -> Dict[str, Any]:
+    """
+    启用 Gatekeeper（在 OpenClaw agent spawn GK session 后调用）。
+
+    在 _orchestrate_state.json 中设置 gk_enabled=true。
+    """
+    state = load_orchestrate_state(paper_name)
+    if not state:
+        return {"ok": False, "error": "状态文件不存在"}
+    state["gk_enabled"] = True
+    state["gk_session"] = gk_session
+    state["gk_started_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    save_orchestrate_state(paper_name, state)
+    return {"ok": True, "message": f"Gatekeeper 已启用（session={gk_session}）"}
+
+
+def disable_gatekeeper(paper_name: str) -> Dict[str, Any]:
+    """禁用 Gatekeeper（流程结束后调用）"""
+    state = load_orchestrate_state(paper_name)
+    if state:
+        state["gk_enabled"] = False
+        save_orchestrate_state(paper_name, state)
+    # 清理协作文件
+    clear_pending(paper_name)
+    return {"ok": True, "message": "Gatekeeper 已停用"}
+
+
+# ============================================================
+# Phase 1: 目录解析
+# ============================================================
+
 
 # ============================================================
 # 状态管理（Orchestrate state 函数已迁移至 state_manager_v2.py，修复 B-2）
@@ -1557,15 +1620,41 @@ def orchestrate_phase4(paper_name: str,
         p1_count = len(p1)
         print(f"\n⚠️ HIL #8: Phase 3.5 尚未通过，是否继续 Phase 4？")
         print(f"  当前 P0={p0_count}, P1={p1_count}")
-        user_input = input("  继续执行 Phase 4？(y/N): ").strip().lower()
-        if user_input != 'y':
-            return {
-                "ok": False,
-                "blocked": "hil8_phase3_5_not_passed",
-                "p0": p0_count,
-                "p1": p1_count,
-                "message": f"HIL #8：Phase 3.5 未通过（当前 P0={p0_count}, P1={p1_count}），已暂停"
-            }
+
+        # 通过 Gatekeeper 通知用户，等决策（blocking）
+        gk_result = _gk_notify(
+            paper_name=paper_name,
+            event="hils_blocked",
+            phase="phase4",
+            node_id="",
+            details={"hil": "hil8", "p0": p0_count, "p1": p1_count},
+            blocking=True,
+        )
+
+        if not gk_result.get("gk_disabled"):
+            # Gatekeeper 模式：看用户决策
+            decision = gk_result.get("decision", "")
+            if decision not in ("proceed", "fix"):
+                return {
+                    "ok": False,
+                    "blocked": "hil8_phase3_5_not_passed",
+                    "gk_decision": decision,
+                    "p0": p0_count,
+                    "p1": p1_count,
+                    "message": f"HIL #8：用户选择「{decision}」，Phase 4 已暂停"
+                }
+            # decision == proceed 或 fix → 继续
+        else:
+            # 回退 CLI 交互
+            user_input = input("  继续执行 Phase 4？(y/N): ").strip().lower()
+            if user_input != 'y':
+                return {
+                    "ok": False,
+                    "blocked": "hil8_phase3_5_not_passed",
+                    "p0": p0_count,
+                    "p1": p1_count,
+                    "message": f"HIL #8：Phase 3.5 未通过（当前 P0={p0_count}, P1={p1_count}），已暂停"
+                }
 
     # 自动修复 P0
     fix_result = {"fixed_p0": 0, "fixed_p1": 0}
@@ -1651,13 +1740,39 @@ def orchestrate_phase5(paper_name: str) -> Dict[str, Any]:
     print(f"\n⚠️ HIL #9: Phase 5 Word 输出前最终审批")
     print(f"  Phase 3.5 结果：P0={p0}, P1={p1}")
     print(f"  即将导出最终版 Markdown 并生成 Word")
-    user_input = input("  确认导出？(y/N): ").strip().lower()
-    if user_input != 'y':
-        return {
-            "ok": False,
-            "blocked": "hil9_word_export_not_confirmed",
-            "message": "HIL #9：用户取消 Word 导出"
-        }
+
+    # 通过 Gatekeeper 通知用户，等决策（blocking）
+    gk_result = _gk_notify(
+        paper_name=paper_name,
+        event="export_ready",
+        phase="phase5",
+        node_id="",
+        details={"p0": p0, "p1": p1},
+        blocking=True,
+    )
+
+    proceed = False
+    if not gk_result.get("gk_disabled"):
+        decision = gk_result.get("decision", "")
+        if decision in ("proceed", "fix"):
+            proceed = True
+        else:
+            return {
+                "ok": False,
+                "blocked": "hil9_word_export_not_confirmed",
+                "gk_decision": decision,
+                "message": f"HIL #9：用户选择「{decision}」，已取消导出"
+            }
+    else:
+        # 回退 CLI 交互
+        user_input = input("  确认导出？(y/N): ").strip().lower()
+        proceed = (user_input == 'y')
+        if not proceed:
+            return {
+                "ok": False,
+                "blocked": "hil9_word_export_not_confirmed",
+                "message": "HIL #9：用户取消 Word 导出"
+            }
 
     # 运行 Guardrails 校验
     guardrails_result = {}
