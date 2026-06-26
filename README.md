@@ -13,7 +13,7 @@
 | 版本线 | ClawHub Slug | 当前 latest | 状态 | 文档 |
 |--------|--------------|-------------|------|------|
 | **v1.x**（稳定） | `thesis-workflow` | **v1.7.3** | 长期维护，仅兼容性修复 | [CHANGELOG-v1.md](./CHANGELOG-v1.md) |
-| **v2.x**（新框架） | `thesis-workflow-v2` | **v2.0.11-beta** | ⚠️ 测试版，outline-anchored + 9 HIL + 多工具检索 | [CHANGELOG-v2.md](./CHANGELOG-v2.md) |
+| **v2.x**（新框架） | `thesis-workflow-v2` | **v2.0.12-beta** | ⚠️ 测试版，outline-anchored + 9 HIL + 多工具检索 | [CHANGELOG-v2.md](./CHANGELOG-v2.md) |
 
 ### 选型指南
 
@@ -67,6 +67,7 @@ openclaw skills install thesis-workflow-v2
 
 | 版本 | 亮点 |
 |------|------|
+| 2.0.12-beta | Phase 3.5 大纲锚定章节拆分（替代硬编码正则）+ P0/P1 修复（F1-F6）|
 | 2.0.11-beta | 清理 v1 残留 + clawhubignore 排除 |
 | 2.0.10-beta | Phase 3.5/4/5 实现 + requirements.txt + lazy BGE |
 | 2.0.9-beta | BGE-small-zh 向量标题匹配（Layer 2） |
