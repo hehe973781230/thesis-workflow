@@ -1192,12 +1192,10 @@ def confirm_phase3_and_export(paper_name: str) -> Dict[str, Any]:
 
     full_content = _assemble_full_content(paper_name, state)
 
-    # 保存最终内容
-    output_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..",
-        f"papers/{paper_name}_final.md"
-    )
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    # 保存最终内容（统一路径：WORKSPACE/paper_name/final.md）
+    output_dir = _get_paper_dir(paper_name)
+    output_path = os.path.join(output_dir, f"{paper_name}_final.md")
+    os.makedirs(output_dir, exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(full_content)
 
