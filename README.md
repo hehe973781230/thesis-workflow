@@ -13,12 +13,12 @@
 | 版本线 | ClawHub Slug | 当前 latest | 状态 | 文档 |
 |--------|--------------|-------------|------|------|
 | **v1.x**（稳定） | `thesis-workflow` | **v1.7.3** | 长期维护，仅兼容性修复 | [CHANGELOG-v1.md](./CHANGELOG-v1.md) |
-| **v2.x**（新框架） | `thesis-workflow-v2` | **v2.0.14-beta** | ⚠️ 测试版，outline-anchored + 9 HIL + 多工具检索 | [CHANGELOG-v2.md](./CHANGELOG-v2.md) |
+| **v2.x**（新框架） | `thesis-workflow-v2` | **v2.0.15-beta** | ⚠️ 测试版，outline-anchored + 9 HIL + 多工具检索 | [CHANGELOG-v2.md](./CHANGELOG-v2.md) |
 
 ### 选型指南
 
 - **生产环境 / 已有 v1 用户** → `thesis-workflow` (v1.7.3，稳定)
-- **新框架 / outline-anchored / 9 HIL 体验** → `thesis-workflow-v2` (v2.0.14-beta，测试)
+- **新框架 / outline-anchored / 9 HIL 体验** → `thesis-workflow-v2` (v2.0.15-beta，测试)
 - **同时跑多篇论文** → 两个都装，**可共存**
 
 ### 怎么装两个？
