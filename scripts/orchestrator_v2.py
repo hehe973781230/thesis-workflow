@@ -209,7 +209,7 @@ def orchestrate_phase1_1(
     docx_path: str = None
 ) -> Dict[str, Any]:
     """
-    Phase 1.1: 解析入口（修订 Step 11 — 龙哥拍板“1.先上传 2.后面才能解析”）
+    Phase 1.1: 解析入口（修订 Step 11 — 拍板决策“1.先上传 2.后面才能解析”）
 
     拍板要点：
       - 拍板 #1 强制：Phase 1.1 必走（未传任何输入报错）

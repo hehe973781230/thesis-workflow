@@ -195,7 +195,7 @@ v1.7.4 / v1.7.5 / v1.7.6 / v1.7.7 **实际为 v2 框架的早期 alpha 开发**�
 
 ### outline_parser 引擎切换 B→A 单向降级（#1）
 
-F1-F5 决策拍板（龙哥 2026-06-25 确认）：
+F1-F5 决策拍板：
 - F1 弹窗 = **否**：用户静默，不调 warnings.warn
 - F2 audit = **是**：降级事件写 state.audit_log
 - F3 重试 = **1 次**：MinerU 失败 1 次立即降级
@@ -332,7 +332,7 @@ v2.0.0 中 `_get_prev_chapter_summary()` 修订为 `prev_sibling_id == None` 触
 
 **修改函数**：`scripts/state_manager_v2.py:_get_prev_chapter_summary()`
 
-#### 2. 端到端验证测试套件（按龙哥拍板）
+#### 2. 端到端验证测试套件
 
 **决策**：
 - 思路：**方案 A（mock） + 方案 B（真实样本）精华**
@@ -482,7 +482,7 @@ e79f343 feat(step10): enhancement 4 — pre-writing info check + content_hint pi
 c2adf09 feat(step9): enhancement 1 — cross-parent bridge via chapter summary nodes
 ```
 
-按 MEMORY 规则：不 push 不 publish，等龙哥确认后再推送到 GitHub + ClawHub。
+按 MEMORY 规则：不 push 不 publish，等确认后再推送到 GitHub + ClawHub。
 
 ---
 
@@ -527,7 +527,7 @@ e79f343 feat(step10): enhancement 4 — pre-writing info check + content_hint pi
 c2adf09 feat(step9): enhancement 1 — cross-parent bridge via chapter summary nodes
 ```
 
-按 MEMORY 规则：不 push 不 publish，等龙哥确认后再推送到 GitHub + ClawHub。
+按 MEMORY 规则：不 push 不 publish，等确认后再推送到 GitHub + ClawHub。
 
 ## [v1.7.6] - 2026-06-23
 
@@ -535,7 +535,7 @@ c2adf09 feat(step9): enhancement 1 — cross-parent bridge via chapter summary n
 
 **问题**：原 Phase 1 流程只走「目录确认」直接进 Phase 2，**跳过开题报告归因**，导致 Phase 2 第一次写作时所有节点 `content_hint` 为空 → 触发增强项4「写作前信息检查」全节点暂停。
 
-**拍板决策**（龙哥 2026-06-23 确认）：
+**拍板决策**：
 - 强制 A：Phase 1.3 必走才能进 Phase 2（不允许跳过生产路径）
 - 方案 B：枚举字段 `phase1_3_status = "pending|submitted|confirmed|skipped"`
 - 时机 A：submit 时一次性写入 state（持久化）
@@ -579,7 +579,7 @@ c2adf09 feat(step9): enhancement 1 — cross-parent bridge via chapter summary n
 
 **问题**：节点写作前如果完全没有外部信息（content_hint 空 + 用户 hints 空 + bridge 三级全空），NodeWriter 拿到 prompt 后缺乏上下文，LLM 自由发挥质量差。
 
-**拍板决策**（龙哥 2026-06-23 确认）：
+**拍板决策**：
 - 判断标准 A：content_hint + user_hints + bridge **任一为空** → needs_user_input
 - 3 个选项全保留：用户提供 hint / AI 自行生成 / 跳过节点
 - Phase 1 完成时一次性写入 state（持久化）
@@ -644,7 +644,7 @@ c2adf09 feat(step9): enhancement 1 — cross-parent bridge via chapter summary n
 - `test_bridge_p3_fallback.py`：P1/P2 优先级、P3 跨章节桥接、不可用降级、首章节、context 自动附加（6 个）
 - `test_integration_chapter_summary.py`：happy path + LLM 失败 fallback 端到端（2 个）
 
-### 拍板决策（龙哥 2026-06-23 确认）
+### 拍板决策
 
 1. ✅ 方案 C（虚拟摘要节点）
 2. ✅ 200-300 字够了

@@ -219,7 +219,7 @@ export THESIS_WORKFLOW_ROOT=~/.openclaw/workspace_v2
 - [ ] 无敏感信息（grep 检查）
 - [ ] 临时文件清理（`/tmp/*`, `~/.openclaw/workspace/test_*`）
 - [ ] git tag 已打
-- [ ] 龙哥 review commit
+- [ ] maintainer review commit
 - [ ] 推 GitHub + 发 ClawHub 都做（不只推一个）
 
 ## 决策记录

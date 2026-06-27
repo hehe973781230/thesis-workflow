@@ -2,7 +2,7 @@
 """
 test_phase1_3.py - Step 11 Orchestrator Phase 1.3 集成 单元测试（修订版）
 
-按龙哥拍板的修订流程：
+按拍板决策的修订流程：
   Phase 1.0 上传 → Phase 1.1 解析 → Phase 1.2 确认 → Phase 1.3 归因 → Phase 2
 
 覆盖场景：

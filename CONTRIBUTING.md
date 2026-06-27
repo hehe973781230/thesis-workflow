@@ -334,7 +334,7 @@ CHANGELOG-v2.md     ← v2.x + alpha 阶段说明
 - [ ] 无敏感信息（grep 检查）
 - [ ] 临时文件清理（`/tmp/*`, `~/.openclaw/workspace/test_*`）
 - [ ] git tag 已打
-- [ ] 龙哥 review commit（v2.0.6 起强制）
+- [ ] maintainer review commit（v2.0.6 起强制）
 - [ ] 推 GitHub + 发 ClawHub 都做
 
 ---
