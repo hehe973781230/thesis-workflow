@@ -1078,16 +1078,7 @@ def orchestrate_phase3(paper_name: str) -> Dict[str, Any]:
     completed_ids = set(state["completed_nodes"])
 
     # 按顺序拼接内容
-    sections = []
-    for node in nodes:
-        if node["id"] in completed_ids or node["id"] in state.get("failed_nodes", []):
-            node_data = outline_get_node(paper_name, node["id"])
-            content = node_data.get("content", "") if node_data else ""
-            if content:
-                title = node.get("title", node["id"])
-                sections.append(f"## {title}\n\n{content}")
-
-    full_content = "\n\n".join(sections)
+    full_content = _assemble_full_content(paper_name, state)
 
     # 标记为待用户确认状态
     state["phase3_status"] = "awaiting_review"
@@ -1195,16 +1186,7 @@ def confirm_phase3_and_export(paper_name: str) -> Dict[str, Any]:
     nodes = outline_state["outline"]["outline_tree"]["nodes"]
     completed_ids = set(state["completed_nodes"])
 
-    sections = []
-    for node in nodes:
-        if node["id"] in completed_ids or node["id"] in state.get("failed_nodes", []):
-            node_data = outline_get_node(paper_name, node["id"])
-            content = node_data.get("content", "") if node_data else ""
-            if content:
-                title = node.get("title", node["id"])
-                sections.append(f"## {title}\n\n{content}")
-
-    full_content = "\n\n".join(sections)
+    full_content = _assemble_full_content(paper_name, state)
 
     # 输出到 workspace paper 目录下（统一路径）
     output_dir = _get_paper_dir(paper_name)
@@ -1442,16 +1424,7 @@ def orchestrate_phase3_5(paper_name: str,
     nodes = outline_state["outline"]["outline_tree"]["nodes"]
     completed_ids = set(state["completed_nodes"])
 
-    sections = []
-    for node in nodes:
-        if node["id"] in completed_ids or node["id"] in state.get("failed_nodes", []):
-            node_data = outline_get_node(paper_name, node["id"])
-            content = node_data.get("content", "") if node_data else ""
-            if content:
-                title = node.get("title", node["id"])
-                sections.append(f"## {title}\n\n{content}")
-
-    full_content = "\n\n".join(sections)
+    full_content = _assemble_full_content(paper_name, state)
 
     # 逐章深度评审（修复 8000 字截断 Bug）
     if llm_func:
@@ -1781,15 +1754,7 @@ def orchestrate_phase4(paper_name: str,
     nodes = outline_state["outline"]["outline_tree"]["nodes"]
     completed_ids = set(state["completed_nodes"])
 
-    sections = []
-    for node in nodes:
-        if node["id"] in completed_ids or node["id"] in state.get("failed_nodes", []):
-            node_data = outline_get_node(paper_name, node["id"])
-            content = node_data.get("content", "") if node_data else ""
-            if content:
-                sections.append(f"## {node.get('title', node['id'])}\n\n{content}")
-
-    full_content = "\n\n".join(sections)
+    full_content = _assemble_full_content(paper_name, state)
 
     state["phase"] = "phase4"
     state["phase4_status"] = "completed"
@@ -1883,15 +1848,7 @@ def orchestrate_phase5(paper_name: str) -> Dict[str, Any]:
     nodes = outline_state["outline"]["outline_tree"]["nodes"]
     completed_ids = set(state["completed_nodes"])
 
-    sections = []
-    for node in nodes:
-        if node["id"] in completed_ids or node["id"] in state.get("failed_nodes", []):
-            node_data = outline_get_node(paper_name, node["id"])
-            content = node_data.get("content", "") if node_data else ""
-            if content:
-                sections.append(f"## {node.get('title', node['id'])}\n\n{content}")
-
-    full_content = "\n\n".join(sections)
+    full_content = _assemble_full_content(paper_name, state)
 
     # 保存最终 Markdown
     # 输出到 workspace paper 目录下（统一路径）
