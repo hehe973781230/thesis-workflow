@@ -1,7 +1,7 @@
 # CHANGELOG - v2.x 新框架
 
 > v2.x 是 **v2 框架**（outline-anchored 重构 + 9 HIL 节点 + 真实 CLI 入口）的活跃开发分支。
-> 当前 latest: **v2.0.12-beta**
+> 当前 latest: **v2.0.14-beta**
 > ClawHub Slug: `thesis-workflow-v2`（独立仓库）
 > 详见 [CHANGELOG.md](./CHANGELOG.md) 的版本线索引。
 
@@ -17,11 +17,42 @@ v1.7.4 / v1.7.5 / v1.7.6 / v1.7.7 **实际为 v2 框架的早期 alpha 开发**�
 - v2.0.6 = v2 上一稳定版
 - v2.0.7 = v2 上一版本
 - v2.0.11-beta = v2 上一版本
-- v2.0.12-beta = v2 当前 latest
+- v2.0.14-beta = v2 当前 latest
 
 **Commit hash 已保留，可在 git history 中追溯。**
 
-## [v2.0.12-beta] - 2026-06-26
+## [v2.0.14-beta] - 2026-06-27
+
+### M1-M9 代码审查问题修复
+
+**严格按 M1-M9 审查方案逐项修复，提升 v2 框架代码质量。**
+
+#### P0：信息稀缺检查 + 路径统一
+
+- **`scripts/orchestrator_v2.py` M1**：`check_info_scarcity()` 移除 `user_hints` 强制检查，仅检查 `content_hint` + `bridge`，解决 Phase 2 全节点阻塞问题
+- **`scripts/orchestrator_v2.py` M2**：`state_manager_v2` 导入 `_get_paper_dir`，Phase 3/5/Guardrails 全部统一为 `WORKSPACE/{paper_name}/` 路径
+- **`scripts/md2docx_strict.py`**：emoji ❌ → [×]，新增 `_ensure_utf8_stdout()` 修复 Windows GBK 编码
+
+#### P1：Phase 4 备份 + M5 跨章 + M6 原子写入 + M7 重构
+
+- **`scripts/orchestrator_v2.py` M3**：`auto_fix_p0_issues()` + `orchestrate_phase4()` 内部 P0 修复
+  - 字数校验（修复后字数 < 原字数 50% → 跳过并 `warnings.warn`）
+  - `outline_update_status` 自动备份旧 `content`
+  - `except Exception` → `warnings.warn()`
+- **`scripts/orchestrator_v2.py` M5**：`orchestrate_phase3_5()` 评审 prompt 注入跨章上下文
+  - 前一章 `key_conclusion` 核心结论
+  - 下一章标题
+- **`scripts/state_manager_v2.py` M6**：`outline_save` / `save_orchestrate_state` 原子写入（tmp+rename）；读取加重试 3 次
+- **`scripts/orchestrator_v2.py` M7**：抽取 `_assemble_full_content()` 公共函数，5 处重复调用统一
+
+#### P2：M8/M9 微调
+
+- **`scripts/orchestrator_v2.py` M8**：`except Exception: pass` → `warnings.warn()` 记录（4 处）
+- **`SKILL.md` M9**：「引用完整性」描述修正为「逐章≥1处，全文≥10处」
+
+---
+
+## [v2.0.13-beta] - 2026-06-27
 
 ### Phase 5.3：MinerU 格式闭环校验
 
