@@ -279,7 +279,7 @@ python3 scripts/loop_self_check.py --file 论文_xxx.docx --verify-docx         
 | 3 | 参考文献存在 | Phase 4 |
 | 4 | 无 `## 第X章` 混合格式 | Phase 2/4 |
 | 5 | 无 `**正文加粗**` | Phase 2/4 |
-| 6 | 引用完整性（≥10处） | Phase 2/4 |
+| 6 | 引用完整性（逐章≥1处，全文≥10处） | Phase 2/4 |
 | 7 | 三线表列数一致 | Phase 4 |
 | 8 | 表标题在表上方 | Phase 4 |
 | 9 | 无合并残留（`===END===`） | Phase 4 |

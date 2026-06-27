@@ -48,19 +48,31 @@ def outline_save(paper_name: str, outline: Dict[str, Any]) -> Dict[str, Any]:
         "updated_at": datetime.now().isoformat()
     }
     
-    with open(state_path, 'w', encoding='utf-8') as f:
+    # 原子写入：先写临时文件，再 rename
+    tmp_path = state_path + ".tmp"
+    with open(tmp_path, 'w', encoding='utf-8') as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, state_path)
     
     return {"ok": True, "path": state_path}
 
 
 def outline_load(paper_name: str) -> Optional[Dict[str, Any]]:
-    """加载目录树状态"""
+    """加载目录树状态（带重试）"""
     state_path = _get_state_path(paper_name)
     if not os.path.exists(state_path):
         return None
-    with open(state_path, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    for attempt in range(3):
+        try:
+            with open(state_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            if attempt < 2:
+                import time
+                time.sleep(0.1)
+                continue
+            return None
+    return None
 
 
 # ============================================================
@@ -79,6 +91,7 @@ def outline_update_status(paper_name: str, node_id: str, status: str,
                           word_count: int = None,
                           content: str = None,
                           content_hint: str = None,
+                          content_backup: str = None,
                           force: bool = False) -> Dict[str, Any]:
     """
     更新节点状态
@@ -123,9 +136,14 @@ def outline_update_status(paper_name: str, node_id: str, status: str,
             if word_count is not None:
                 node["word_count"] = word_count
             if content is not None:
+                # M3 修复：写入新内容前先备份旧内容
+                if content_backup is None and node.get("content"):
+                    node["content_backup"] = node["content"]
                 node["content"] = content
             if content_hint is not None:
                 node["content_hint"] = content_hint
+            if content_backup is not None:
+                node["content_backup"] = content_backup
             node_found = True
             break
     
@@ -405,24 +423,33 @@ def _get_orchestrate_state_path(paper_name: str) -> str:
 
 
 def load_orchestrate_state(paper_name: str) -> Optional[Dict[str, Any]]:
-    """加载编排状态"""
+    """加载编排状态（带重试）"""
     path = _get_orchestrate_state_path(paper_name)
     if not os.path.exists(path):
         return None
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return None
+    for attempt in range(3):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            if attempt < 2:
+                import time
+                time.sleep(0.1)
+                continue
+            return None
+    return None
 
 
 def save_orchestrate_state(paper_name: str, state: Dict[str, Any]) -> bool:
-    """保存编排状态"""
+    """保存编排状态（原子写入）"""
     path = _get_orchestrate_state_path(paper_name)
     try:
         state["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
-        with open(path, 'w', encoding='utf-8') as f:
+        # 原子写入：先写临时文件，再 rename
+        tmp_path = path + ".tmp"
+        with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, path)
         return True
     except Exception:
         return False
