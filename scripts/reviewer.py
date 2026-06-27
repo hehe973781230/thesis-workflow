@@ -16,6 +16,7 @@ reviewer.py - 节点内容评审器 v1.0
 
 import re
 import sys
+import ast
 from typing import Any, Dict, List, Optional
 
 try:
@@ -155,9 +156,9 @@ def ai_review(paper_name: str, node_id: str,
         # 尝试提取 JSON（可能在 markdown 代码块中）
         json_match = re.search(r'\{[\s\S]*\}', response)
         if json_match:
-            result = eval(json_match.group())  # 安全的简单解析
+            result = ast.literal_eval(json_match.group())  # 安全的简单解析
         else:
-            result = eval(response)  # 直接解析
+            result = ast.literal_eval(response)  # 直接解析
     except Exception:
         return {
             "ok": False,
@@ -204,9 +205,9 @@ def parse_review_response(response: str) -> Dict[str, Any]:
     try:
         json_match = re.search(r'\{[\s\S]*\}', response)
         if json_match:
-            result = eval(json_match.group())
+            result = ast.literal_eval(json_match.group())
         else:
-            result = eval(response)
+            result = ast.literal_eval(response)
         return {"ok": True, **result}
     except Exception as e:
         return {

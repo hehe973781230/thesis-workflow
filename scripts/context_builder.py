@@ -8,6 +8,7 @@ context_builder.py - Prompt 包生成器 v1.0
 
 import re
 import json
+import os
 from typing import Dict, Any, Optional, List
 try:
     from .state_manager_v2 import outline_load, outline_get_node, outline_get_context

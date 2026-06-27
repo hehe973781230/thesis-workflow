@@ -20,6 +20,10 @@ import re
 import sys
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from pathlib import Path
+_script_dir = Path(__file__).parent
+if str(_script_dir) not in sys.path:
+    sys.path.insert(0, str(_script_dir))
 
 from context_builder import build_prompt_package_text, build_prompt_package
 from node_writer import write_node_with_llm, extract_key_conclusion

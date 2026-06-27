@@ -18,7 +18,7 @@
 ### 选型指南
 
 - **生产环境 / 已有 v1 用户** → `thesis-workflow` (v1.7.3，稳定)
-- **新框架 / outline-anchored / 9 HIL 体验** → `thesis-workflow-v2` (v2.0.11-beta，测试)
+- **新框架 / outline-anchored / 9 HIL 体验** → `thesis-workflow-v2` (v2.0.12-beta，测试)
 - **同时跑多篇论文** → 两个都装，**可共存**
 
 ### 怎么装两个？

@@ -13,12 +13,12 @@ This repository contains **two independent version lines**, published separately
 | Version | ClawHub Slug | Latest | Status |
 |---------|-------------|--------|--------|
 | **v1.x** (stable) | `thesis-workflow` | **v1.7.3** | Maintenance only, compatibility fixes |
-| **v2.x** (new framework) | `thesis-workflow-v2` | **v2.0.11-beta** | ⚠️ Beta, outline-anchored + 9 HIL |
+| **v2.x** (new framework) | `thesis-workflow-v2` | **v2.0.12-beta** | ⚠️ Beta, outline-anchored + 9 HIL |
 
 ### Selection Guide
 
 - **Production / v1 users** → `thesis-workflow` (v1.7.3, stable)
-- **New framework / outline-anchored / 9 HIL** → `thesis-workflow-v2` (v2.0.11-beta, testing)
+- **New framework / outline-anchored / 9 HIL** → `thesis-workflow-v2` (v2.0.12-beta, testing)
 - **Multiple theses** → Both can coexist
 
 ## Core Features (v2 Framework)

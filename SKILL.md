@@ -214,7 +214,7 @@ print(r.get("message", ""))
 |---|---------|---------|------|
 | 1 | Phase 1.1 后 | 大纲结构 | 接受 / 修改 |
 | 2 | Phase 1.3 后 | 归因结果 | 接受 / 调整 hint |
-| 3 | Phase 2 写作前 | info_scarcity | 提供 hint / AI 生成 / 跳过 |
+| 3 | 在 write_single_node() 写入单节点前 | info_scarcity | 提供 hint / AI 生成 / 跳过 |
 | 4 | Phase 2 评审后 | quality=medium/low | 接受 / 重写 |
 | 5 | Phase 2 完成后 | 章节内容预览 | 通过 / 修改 |
 | 6 | Phase 3 整合后 | 整合版内容 | 通过 / 修改反馈 |

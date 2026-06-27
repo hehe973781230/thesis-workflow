@@ -30,7 +30,8 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from orchestrator_v2 import (
     orchestrate, orchestrate_phase1_1, orchestrate_phase2,
-    orchestrate_phase3, confirm_phase3_and_export,
+    orchestrate_phase3, orchestrate_phase3_5, orchestrate_phase4, orchestrate_phase5,
+    confirm_phase3_and_export,
     confirm_phase1_3, write_single_node, apply_user_decision,
     check_info_scarcity, confirm_phase1, skip_phase1_3
 )
@@ -1108,7 +1109,7 @@ def main():
         description="thesis-workflow v2 真实入口 CLI（v2.0.6 新增）"
     )
     parser.add_argument("paper_name", help="论文标识（与 orchestrate_state 文件名一致）")
-    parser.add_argument("--phase", choices=["phase1", "phase2", "phase3", "auto"],
+    parser.add_argument("--phase", choices=["phase1", "phase2", "phase3", "phase3_5", "phase4", "phase5", "auto"],
                        default="auto", help="指定阶段")
     parser.add_argument("--status", action="store_true", help="仅查看状态")
     parser.add_argument("--llm", help="指定 LLM 模型（留空则自动从当前 session 获取）")
@@ -1207,6 +1208,30 @@ def main():
     if args.phase in ("phase3", "auto"):
         if not run_phase3(paper_name):
             return 1
+
+    if args.phase in ("phase3_5", "auto"):
+        print(f"\n📝 Phase 3.5: 深度学术评审")
+        r = orchestrate_phase3_5(paper_name, llm_func=llm_func)
+        if not r.get("ok"):
+            print(f"❌ Phase 3.5 失败: {r.get('error')}")
+            return 1
+        print(f"✅ Phase 3.5 完成")
+
+    if args.phase in ("phase4", "auto"):
+        print(f"\n📝 Phase 4: 整合修复")
+        r = orchestrate_phase4(paper_name, llm_func=llm_func)
+        if not r.get("ok"):
+            print(f"❌ Phase 4 失败: {r.get('error')}")
+            return 1
+        print(f"✅ Phase 4 完成")
+
+    if args.phase in ("phase5", "auto"):
+        print(f"\n📝 Phase 5: 终审 + Word 输出")
+        r = orchestrate_phase5(paper_name)
+        if not r.get("ok"):
+            print(f"❌ Phase 5 失败: {r.get('error')}")
+            return 1
+        print(f"✅ Phase 5 完成")
 
     print(f"\n🎉 全部完成")
     return 0
