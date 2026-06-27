@@ -1042,7 +1042,9 @@ def handle_review_decision(paper_name: str, node_id: str,
         return {"ok": False, "error": f"节点 {node_id} 不在待确认列表中"}
 
     if decision == "continue":
-        # 接受当前版本
+        # 接受当前版本：同步 outline state（reviewing → completed）
+        outline_update_status(paper_name, node_id, "completed", force=True)
+        state = load_orchestrate_state(paper_name)  # 重新加载
         state["pending_review"].remove(node_id)
         if node_id not in state["completed_nodes"]:
             state["completed_nodes"].append(node_id)
@@ -1173,10 +1175,11 @@ def handle_phase3_feedback(paper_name: str,
             new_content = re.sub(r'<key_conclusion>.*?</key_conclusion>', '', new_content, flags=re.DOTALL).strip()
 
             # 写入 state
-            outline_update_status(paper_name, node_id, "completed", content=new_content)
+            outline_update_status(paper_name, node_id, "completed", content=new_content, force=True)
             modified_count += 1
         except Exception as e:
-            pass  # 单节点失败不影响其他
+            import warnings
+            warnings.warn(f"Phase 3 修改节点 {node_id} 异常: {e}")
 
     # 重新整合
     result = orchestrate_phase3(paper_name)
@@ -1542,14 +1545,19 @@ def orchestrate_phase3_5(paper_name: str,
     curr_p0_sigs = _get_p0_signature(review_result.get("p0", []))
     new_p0 = curr_p0_sigs - prev_p0_sigs
 
-    if p0_count == 0 or not new_p0:
+    if p0_count == 0:
+        # 无 P0 → 连续 clean 递增
         state["phase3_5_consecutive_clean"] = state.get("phase3_5_consecutive_clean", 0) + 1
-        # 连续 2 轮无新 P0 才通过
+        # 连续 2 轮无 P0 才通过
         if state["phase3_5_consecutive_clean"] >= 2:
             state["phase3_5_status"] = "passed"
         else:
             state["phase3_5_status"] = "pending_review"
+    elif not new_p0:
+        # 有 P0 但无新增（旧 P0 未修复）→ 不递增 clean，也不重置
+        state["phase3_5_status"] = "pending_review"
     else:
+        # 有新 P0 → 重置 clean
         state["phase3_5_consecutive_clean"] = 0
         state["phase3_5_status"] = "pending_review"
 
@@ -1643,7 +1651,7 @@ def auto_fix_p0_issues(paper_name: str,
                 continue
 
             # M3 修复：写入新内容（outline_update_status 会自动备份旧 content）
-            outline_update_status(paper_name, node_id, "completed", content=new_content)
+            outline_update_status(paper_name, node_id, "completed", content=new_content, force=True)
             fixed += 1
         except Exception as e:
             import warnings
@@ -1700,6 +1708,14 @@ def orchestrate_phase4(paper_name: str,
 
         if not gk_result.get("gk_disabled"):
             # Gatekeeper 模式：看用户决策
+            if gk_result.get("blocked"):
+                return {
+                    "ok": False,
+                    "blocked": "hil8_timeout",
+                    "p0": p0_count,
+                    "p1": p1_count,
+                    "message": "HIL #8：Gatekeeper 决策超时（30分钟），Phase 4 已暂停"
+                }
             decision = gk_result.get("decision", "")
             if decision not in ("proceed", "fix"):
                 return {
@@ -1769,7 +1785,7 @@ def orchestrate_phase4(paper_name: str,
                     )
                     continue
 
-                outline_update_status(paper_name, node_id, "completed", content=new_c)
+                outline_update_status(paper_name, node_id, "completed", content=new_c, force=True)
                 fixed += 1
             except Exception as e:
                 import warnings
@@ -1829,6 +1845,12 @@ def orchestrate_phase5(paper_name: str) -> Dict[str, Any]:
 
     proceed = False
     if not gk_result.get("gk_disabled"):
+        if gk_result.get("blocked"):
+            return {
+                "ok": False,
+                "blocked": "hil9_timeout",
+                "message": "HIL #9：Gatekeeper 决策超时（30分钟），导出已暂停"
+            }
         decision = gk_result.get("decision", "")
         if decision in ("proceed", "fix"):
             proceed = True

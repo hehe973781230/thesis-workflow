@@ -995,10 +995,9 @@ def run_phase2(paper_name: str, llm_func: Callable) -> bool:
                               "3": "跳过该节点"})
 
             if choice == "1":
-                # 接受：手动更新 state（走 v2 API，不直接 outline_update_status）
-                # 使用 orchestrate 的 phase2 路径再调一次会死循环
-                # v2.0.6 TODO: 需要 orchestrate_v2 提供 apply_review_decision() API
-                # 当前 workaround: 直接更新 state.completed_nodes
+                # 接受：同步 outline state（reviewing → completed）+ orchestrate state
+                from state_manager_v2 import outline_update_status
+                outline_update_status(paper_name, next_node_id, "completed", force=True)
                 state = load_orchestrate_state(paper_name)
                 if next_node_id not in state.get("completed_nodes", []):
                     state["completed_nodes"].append(next_node_id)
