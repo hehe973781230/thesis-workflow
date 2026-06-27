@@ -1440,9 +1440,34 @@ def orchestrate_phase3_5(paper_name: str,
         all_p0, all_p1, all_p2 = [], [], []
         chapter_summaries = []
 
+        # M5 修复：预构建章节 key_conclusion 摘要，供跨章评审使用
+        chapter_conclusions = {}
+        for node in nodes:
+            if node.get("writing_status") == "completed":
+                ch_id = node["id"]
+                kc = node.get("key_conclusion", "")
+                if kc:
+                    chapter_conclusions[ch_id] = kc
+
         chapters = _split_by_chapter(full_content, nodes)
         for node_id, chapter_info in chapters.items():
             chapter_text = chapter_info["content"]
+
+            # M5 修复：构建前后章上下文
+            sorted_ids = list(chapters.keys())
+            idx_map = {nid: i for i, nid in enumerate(sorted_ids)}
+            idx = idx_map.get(node_id, -1)
+            ctx_lines = []
+            if idx > 0:
+                prev_id = sorted_ids[idx - 1]
+                prev_kc = chapter_conclusions.get(prev_id, "")
+                if prev_kc:
+                    ctx_lines.append(f"【前一章核心结论】\n{prev_kc}")
+            if idx >= 0 and idx < len(sorted_ids) - 1:
+                next_title = chapters[sorted_ids[idx + 1]]["title"]
+                ctx_lines.append(f"【下一章标题】\n{next_title}")
+            context_block = ("\n\n".join(ctx_lines) + "\n\n") if ctx_lines else ""
+
             chapter_prompt = f"""你是一位学术论文评审专家。请对以下论文的第 {node_id} 进行深度学术评审。
 
 评审维度：
@@ -1452,6 +1477,7 @@ def orchestrate_phase3_5(paper_name: str,
 4. 结论是否与前面的分析一致对应
 5. 章节之间逻辑衔接是否顺畅
 6. 学术规范（引用格式、术语一致性）
+{context_block}请按以下分级输出问题清单：
 
 请按以下分级输出问题清单：
 - P0（阻塞性）：必须修复的问题（论证错误、数据明显偏差、逻辑断裂）
@@ -1594,10 +1620,24 @@ def auto_fix_p0_issues(paper_name: str,
             new_content = llm_func(prompt)
             import re
             new_content = re.sub(r'<key_conclusion>.*?</key_conclusion>', '', new_content, flags=re.DOTALL).strip()
+
+            # M3 修复：字数校验，修复后不应大幅缩水
+            old_len = len(current_content)
+            new_len = len(new_content)
+            if old_len > 0 and new_len < old_len * 0.5:
+                import warnings
+                warnings.warn(
+                    f"Phase 4 修复跳过：节点 {node_id} 修复后字数 {new_len} < 原字数 {old_len} 的 50%，"
+                    f"疑似修复失败，保留原内容"
+                )
+                continue
+
+            # M3 修复：写入新内容（outline_update_status 会自动备份旧 content）
             outline_update_status(paper_name, node_id, "completed", content=new_content)
             fixed += 1
-        except Exception:
-            pass
+        except Exception as e:
+            import warnings
+            warnings.warn(f"Phase 4 修复节点 {node_id} 异常: {e}")
 
     return {
         "ok": True,
@@ -1699,10 +1739,23 @@ def orchestrate_phase4(paper_name: str,
                 new_c = llm_func(prompt)
                 import re
                 new_c = re.sub(r'<key_conclusion>.*?</key_conclusion>', '', new_c, flags=re.DOTALL).strip()
+
+                # M3 修复：字数校验
+                old_len = len(node.get("content", ""))
+                new_len = len(new_c)
+                if old_len > 0 and new_len < old_len * 0.5:
+                    import warnings
+                    warnings.warn(
+                        f"Phase 4 修复跳过：节点 {node_id} 修复后字数 {new_len} < 原字数 {old_len} 的 50%，"
+                        f"疑似修复失败，保留原内容"
+                    )
+                    continue
+
                 outline_update_status(paper_name, node_id, "completed", content=new_c)
                 fixed += 1
-            except Exception:
-                pass
+            except Exception as e:
+                import warnings
+                warnings.warn(f"Phase 4 修复节点 {node_id} 异常: {e}")
         fix_result["fixed_p0"] = fixed
 
     # 重新整合论文
@@ -1975,10 +2028,10 @@ def check_info_scarcity(paper_name: str, node_id: str) -> Dict[str, Any]:
     """
     写作前信息贫瘠检查（增强项4）。
 
-    检查 3 项信息源（拍板标准 A）：
+    检查 2 项核心信息源（拍板标准 A）：
       1. content_hint：开题报告提取或用户手写，存于 node.content_hint
-      2. user_hints：用户自定义分析维度，存于 state.chapter_hints[node_id]
-      3. bridge：prev_sibling_conclusion / parent_conclusion / prev_chapter_summary 任一非空
+      2. bridge：prev_sibling_conclusion / parent_conclusion / prev_chapter_summary 任一非空
+    注：user_hints（用户自定义分析维度）为可选增强项，不作为强制检查项。
 
     拍板标准 A：任一为空 → action="needs_user_input"，全部非空 → action="proceed"。
 
@@ -1990,7 +2043,6 @@ def check_info_scarcity(paper_name: str, node_id: str) -> Dict[str, Any]:
         node_title: str,
         current_info: {
           content_hint: str,
-          user_hints: list,
           has_bridge: bool,
           bridge_source: str | None  # "prev" | "parent" | "chapter_summary"
         },
@@ -2026,11 +2078,7 @@ def check_info_scarcity(paper_name: str, node_id: str) -> Dict[str, Any]:
     # 1. content_hint
     content_hint = (node.get("content_hint") or "").strip()
 
-    # 2. user_hints (chapter_hints)
-    chapter_hints = state.get("chapter_hints", {}) if state else {}
-    user_hints = chapter_hints.get(node_id, [])
-
-    # 3. bridge
+    # 2. bridge
     context = outline_get_context(paper_name, node_id)
     has_prev = bool(context.get("prev_sibling_conclusion"))
     has_parent = bool(context.get("parent_conclusion"))
@@ -2052,26 +2100,22 @@ def check_info_scarcity(paper_name: str, node_id: str) -> Dict[str, Any]:
         node.get("level") == 1 and node.get("parent_id") is None
     )
     if is_first_chapter_l1:
-        # 首章 L1：仅检查 content_hint 和 user_hints（bridge 允许空）
+        # 首章 L1：仅检查 content_hint（bridge 允许空，user_hints 可选）
         missing = []
         if not content_hint:
             missing.append("content_hint")
-        if not user_hints:
-            missing.append("user_hints")
         # bridge 缺失是首章 L1 的正常状态，不计入 missing
+        # user_hints 是可选增强项，不作为强制检查
     else:
-        # 标准 A：任一为空 → needs_user_input
+        # 标准 A：content_hint 或 bridge 缺失 → needs_user_input
         missing = []
         if not content_hint:
             missing.append("content_hint")
-        if not user_hints:
-            missing.append("user_hints")
         if not has_bridge:
             missing.append("bridge")
 
     current_info = {
         "content_hint": content_hint,
-        "user_hints": user_hints,
         "has_bridge": has_bridge,
         "bridge_source": bridge_source,
         "is_first_chapter_l1": is_first_chapter_l1
