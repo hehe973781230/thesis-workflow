@@ -135,6 +135,9 @@ def _assemble_full_content(paper_name: str, state: Dict = None) -> str:
     for node in nodes:
         if node["id"] in completed_ids or node["id"] in failed_ids:
             node_data = outline_get_node(paper_name, node["id"])
+            # 排除 reviewing 状态节点（未通过评审的内容不进最终论文）
+            if node_data and node_data.get("writing_status") == "reviewing":
+                continue
             content = node_data.get("content", "") if node_data else ""
             if content:
                 title = node.get("title", node["id"])
@@ -848,9 +851,9 @@ def write_single_node(paper_name: str, node_id: str,
     key_conclusion = extract_key_conclusion_from_response(response_text)
     word_count = count_words(content_clean)
 
-    # Step 4: 写入 state
+    # Step 4: 写入 state（先用 reviewing，评审通过后才 completed）
     outline_update_status(
-        paper_name, node_id, "completed",
+        paper_name, node_id, "reviewing",
         content=content_clean,
         key_conclusion=key_conclusion,
         word_count=word_count
@@ -886,7 +889,11 @@ def write_single_node(paper_name: str, node_id: str,
     # high → 自动完成
     # medium/low → 需要用户确认
     quality = review_result.get("quality", "medium")
-    action = "pending_review" if quality in ("medium", "low") else "completed"
+    if quality == "high":
+        outline_update_status(paper_name, node_id, "completed")
+        action = "completed"
+    else:
+        action = "pending_review"
 
     return {
         "ok": True,
@@ -1475,8 +1482,7 @@ def orchestrate_phase3_5(paper_name: str,
 4. 结论是否与前面的分析一致对应
 5. 章节之间逻辑衔接是否顺畅
 6. 学术规范（引用格式、术语一致性）
-{context_block}请按以下分级输出问题清单：
-
+{context_block}
 请按以下分级输出问题清单：
 - P0（阻塞性）：必须修复的问题（论证错误、数据明显偏差、逻辑断裂）
 - P1（重要）：建议修复（引用不充分、表述不清晰、结构可优化）
@@ -1505,7 +1511,9 @@ def orchestrate_phase3_5(paper_name: str,
                 if chapter_result.get("summary"):
                     chapter_summaries.append(f"{node_id}：{chapter_result['summary']}")
             except Exception as e:
-                pass  # 单章失败不影响其他章节
+                import warnings
+                warnings.warn(f"Phase 3.5 评审章节 {node_id} 异常: {e}")
+                chapter_summaries.append(f"{node_id}：评审异常 - {e}")
 
         review_result = {
             "p0": all_p0,
@@ -1535,11 +1543,15 @@ def orchestrate_phase3_5(paper_name: str,
     new_p0 = curr_p0_sigs - prev_p0_sigs
 
     if p0_count == 0 or not new_p0:
-        # 无 P0 或 P0 没有新增 → HIL 接受
-        state["phase3_5_status"] = "passed"
         state["phase3_5_consecutive_clean"] = state.get("phase3_5_consecutive_clean", 0) + 1
+        # 连续 2 轮无新 P0 才通过
+        if state["phase3_5_consecutive_clean"] >= 2:
+            state["phase3_5_status"] = "passed"
+        else:
+            state["phase3_5_status"] = "pending_review"
     else:
         state["phase3_5_consecutive_clean"] = 0
+        state["phase3_5_status"] = "pending_review"
 
     # 记录本次结果供下次对比
     state["phase3_5_prev_result"] = review_result
@@ -1701,6 +1713,14 @@ def orchestrate_phase4(paper_name: str,
             # decision == proceed 或 fix → 继续
         else:
             # 回退 CLI 交互
+            if not sys.stdin.isatty():
+                return {
+                    "ok": False,
+                    "blocked": "hil8_phase3_5_not_passed",
+                    "p0": p0_count,
+                    "p1": p1_count,
+                    "message": f"HIL #8：Phase 3.5 未通过（P0={p0_count}, P1={p1_count}），需人工确认后继续"
+                }
             user_input = input("  继续执行 Phase 4？(y/N): ").strip().lower()
             if user_input != 'y':
                 return {
@@ -1821,6 +1841,12 @@ def orchestrate_phase5(paper_name: str) -> Dict[str, Any]:
             }
     else:
         # 回退 CLI 交互
+        if not sys.stdin.isatty():
+            return {
+                "ok": False,
+                "blocked": "hil9_word_export_not_confirmed",
+                "message": "HIL #9：Word 导出需人工确认（非交互式环境，已暂停）"
+            }
         user_input = input("  确认导出？(y/N): ").strip().lower()
         proceed = (user_input == 'y')
         if not proceed:
@@ -1830,7 +1856,17 @@ def orchestrate_phase5(paper_name: str) -> Dict[str, Any]:
                 "message": "HIL #9：用户取消 Word 导出"
             }
 
-    # 运行 Guardrails 校验
+    # 整合最终版
+    full_content = _assemble_full_content(paper_name, state)
+
+    # 保存最终 Markdown（统一路径）
+    output_dir = _get_paper_dir(paper_name)
+    output_path = os.path.join(output_dir, f"{paper_name}_final.md")
+    os.makedirs(output_dir, exist_ok=True)
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(full_content)
+
+    # 运行 Guardrails 校验（必须在 output_path 定义之后）
     guardrails_result = {}
     try:
         import subprocess
@@ -1845,16 +1881,6 @@ def orchestrate_phase5(paper_name: str) -> Dict[str, Any]:
             guardrails_result = {"pass": False, "error": result.stderr[:200]}
     except Exception as e:
         guardrails_result = {"pass": False, "error": str(e)}
-
-    # 整合最终版
-    full_content = _assemble_full_content(paper_name, state)
-
-    # 保存最终 Markdown（统一路径）
-    output_dir = _get_paper_dir(paper_name)
-    output_path = os.path.join(output_dir, f"{paper_name}_final.md")
-    os.makedirs(output_dir, exist_ok=True)
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write(full_content)
 
     state["phase"] = "phase5"
     state["phase5_status"] = "exported"

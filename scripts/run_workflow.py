@@ -1215,6 +1215,29 @@ def main():
         if not r.get("ok"):
             print(f"❌ Phase 3.5 失败: {r.get('error')}")
             return 1
+
+        # 审核 Loop：有 P0 → 自动修复 → 重审，直到无新 P0 或超 3 轮
+        max_rounds = 3
+        review_round = r.get("review_round", 1)
+        while r.get("p0_count", 0) > 0 and review_round <= max_rounds:
+            print(f"\n🔄 审核 Loop 第 {review_round} 轮：发现 {r.get('p0_count', 0)} 个 P0，自动修复...")
+            from orchestrator_v2 import auto_fix_p0_issues
+            fix_r = auto_fix_p0_issues(paper_name, llm_func=llm_func)
+            if not fix_r.get("ok"):
+                print(f"❌ P0 修复失败: {fix_r.get('error')}")
+                break
+            print(f"   已修复 {fix_r.get('fixed', 0)}/{fix_r.get('total', 0)} 个 P0")
+            # 重审
+            r = orchestrate_phase3_5(paper_name, llm_func=llm_func)
+            if not r.get("ok"):
+                print(f"❌ 重审失败: {r.get('error')}")
+                break
+            review_round = r.get("review_round", review_round + 1)
+
+        if r.get("p0_count", 0) == 0:
+            print(f"✅ Phase 3.5 通过（连续 2 轮无新 P0）")
+        else:
+            print(f"⚠️ Phase 3.5 超 {max_rounds} 轮仍有 P0，需人工介入")
         print(f"✅ Phase 3.5 完成")
 
     if args.phase in ("phase4", "auto"):
