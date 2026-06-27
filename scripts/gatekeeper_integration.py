@@ -33,7 +33,7 @@ WORKSPACE = Path(os.environ.get(
 # ============================================================
 
 def _paper_dir(paper_name: str) -> Path:
-    return WORKSPACE / "papers" / paper_name
+    return WORKSPACE / paper_name
 
 
 def _pending_action_path(paper_name: str) -> Path:
