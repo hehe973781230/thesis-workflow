@@ -25,7 +25,23 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
-import re, sys, os, glob
+import io, re, sys, os, glob
+def _ensure_utf8_stdout():
+    """修复 Windows GBK 编码问题：所有脚本入口必须调用"""
+    if sys.platform == 'win32':
+        sys.stdout = io.TextIOWrapper(
+            sys.stdout.buffer,
+            encoding='utf-8',
+            errors='replace'
+        )
+        sys.stderr = io.TextIOWrapper(
+            sys.stderr.buffer,
+            encoding='utf-8',
+            errors='replace'
+        )
+
+_ensure_utf8_stdout()
+
 
 # ============ MBA 格式常量 ============
 FONT_BODY_CN    = '宋体'
@@ -348,11 +364,11 @@ def preflight(md_path):
 
     rf = _find_review_report(md_path)
     if not rf:
-        issues.append("❌ 未找到审核报告（匹配：*审核报告*.md / *_审核*.md），请先完成 Review Agent 终审")
+        issues.append("[×] 未找到审核报告（匹配：*审核报告*.md / *_审核*.md），请先完成 Review Agent 终审")
         return False, issues
 
     if not _check_report_passed(rf):
-        issues.append(f"❌ 审核报告未通过（{os.path.basename(rf)}），请修复后再生成 Word")
+        issues.append(f"[×] 审核报告未通过（{os.path.basename(rf)}），请修复后再生成 Word")
         return False, issues
 
     # 论文内容基本检查
@@ -802,7 +818,7 @@ if __name__ == '__main__':
     docx_path = sys.argv[2]
     proposal_path = sys.argv[3] if len(sys.argv) > 3 else None
     if not os.path.exists(md_path):
-        print(f"❌ 文件不存在: {md_path}"); sys.exit(1)
+        print(f"[×] 文件不存在: {md_path}"); sys.exit(1)
     print("=== MBA Word 生成（Phase 3 规范）===")
     ok, issues = preflight(md_path)
     if not ok:
@@ -811,4 +827,4 @@ if __name__ == '__main__':
     if md_to_docx(md_path, docx_path, proposal_path):
         print(f"✅ 已生成: {docx_path}")
     else:
-        print("❌ 生成失败"); sys.exit(1)
+        print("[×] 生成失败"); sys.exit(1)
