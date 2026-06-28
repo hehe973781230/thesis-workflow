@@ -116,7 +116,9 @@ def check_version():
     if clawhub is None:
         print("  ⚠️  未在 ClawHub 发布过，请先发布首个版本")
     elif version == clawhub:
-        print("  ✅ 三端一致")
+        print("  ✅ 三端一致（正式 release）")
+    elif clawhub.startswith(version + "-beta."):
+        print(f"  ✅ beta 包状态正常：SKILL.md={version}（正式号），ClawHub={clawhub}（beta 快照）")
     else:
         print(f"  ⚠️  版本不一致，SKILL.md={version} ≠ ClawHub={clawhub}")
     print()
