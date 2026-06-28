@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Optional, Tuple, List, Dict, Any, Callable
 from collections import Counter
-from state_manager_v2 import outline_load
+from state_manager_v2 import outline_load, _get_state_path, _get_outline_nodes, _set_outline_nodes
 
 logger = logging.getLogger(__name__)
 
@@ -1159,6 +1159,9 @@ def save_content_hints_to_outline(paper_name: str, content_hints: Dict[str, str]
     将 extract_content_hints() 返回的 {node_id: hint_text} 写入 outline_state。
     增强项4 写作前信息检查：content_hint 持久化到 outline_state 节点字段。
 
+    P0 修复：使用 _get_state_path() 计算路径，支持 THESIS_WORKSPACE 环境变量
+    P1 修复：使用 _get_outline_nodes() / _set_outline_nodes() 处理嵌套兼容
+
     逻辑：
       - 对每个节点的 content_hint 字段写入（如果已有则覆盖）
       - __orphan_count__ 等特殊 key 跳过（不入节点）
@@ -1180,7 +1183,8 @@ def save_content_hints_to_outline(paper_name: str, content_hints: Dict[str, str]
     if not state:
         return {"ok": False, "written": 0, "skipped": 0, "error": "目录树未初始化"}
 
-    nodes = state["outline"]["outline_tree"]["nodes"]
+    # P1 修复：使用 helper 多版本兼容读取
+    nodes = _get_outline_nodes(state)
     node_ids = {n["id"] for n in nodes}
 
     written = 0
@@ -1202,14 +1206,12 @@ def save_content_hints_to_outline(paper_name: str, content_hints: Dict[str, str]
                 written += 1
                 break
 
-    state["outline"]["outline_tree"]["nodes"] = nodes
+    # P1 修复：使用 helper 多版本兼容写回
+    _set_outline_nodes(state, nodes)
     state["updated_at"] = datetime.now().isoformat()
 
-    state_path = os.path.join(
-        os.path.expanduser("~/.openclaw/workspace"),
-        paper_name,
-        "_outline_state.json"
-    )
+    # P0 修复：复用 state_manager_v2 的路径计算（支持 THESIS_WORKSPACE）
+    state_path = _get_state_path(paper_name)
     with open(state_path, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 

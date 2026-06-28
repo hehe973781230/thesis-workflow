@@ -1,43 +1,23 @@
-# CHANGELOG - MBA/学术论文多Agent协作工作流
+# Changelog
 
-所有重要更新都会记录在此文件。
+All notable changes to this project will be documented in this file.
 
-## 当前推荐版本
+## [2.0.16-beta] - 2026-06-28
 
-| 版本线 | 当前 latest | ClawHub Slug | 状态 |
-|--------|------------|--------------|------|
-| **v1.x**（稳定版）| v1.7.3 | `thesis-workflow` | 长期维护，仅兼容性修复 |
-| **v2.x**（新框架）| v2.0.8-beta | `thesis-workflow-v2` | ⚠️ 测试版，multi-search并行引擎 + RuntimeLLM |
+### Fixed
 
-> **重要**：v1 和 v2 是**两个独立发布的 skill**，用不同 ClawHub slug，**安装路径不同**，**互不影响**。
-> 详见 `references/git-workflow.md` 和分支管理策略。
+- **P0 - 硬编码路径问题**：`save_content_hints_to_outline` 硬编码 `~/.openclaw/workspace` 路径，导致 THESIS_WORKSPACE 环境变量不生效。改用 `_get_state_path()` 统一路径计算。
+- **P1 - 嵌套结构兼容层**：新增 `_get_outline_nodes()` / `_set_outline_nodes()` 两个 helper 函数，统一处理 3 种历史嵌套结构：
+  - 结构 A: `state["outline"]["outline_tree"]["nodes"]` （期望结构）
+  - 结构 B: `state["outline"]["nodes"]` （简化结构）
+  - 结构 C: `state["outline"]["outline"]["outline_tree"]["nodes"]` （旧版嵌套）
+- **P1 - 19 处硬编码替换**：state_manager_v2 (7处) + orchestrator_v2 (10处) + outline_parser (2处) 的 `state["outline"]["outline_tree"]["nodes"]` 全部替换为 `_get_outline_nodes(state)`
+- **P1 - 隐藏 bug 修复**：`_set_outline_nodes` 中 `if not state` 改为 `if state is None`，修复空 dict `{}` 作为 falsy 值导致函数直接 return 的问题
+- **P1 - 防御性压平逻辑**：`outline_save` 写盘前自动将 C 结构压平为 A 结构，保证磁盘持久化为标准结构
 
-## 版本线索引
+### Technical
 
-- **v1.x 历史**：见 [CHANGELOG-v1.md](./CHANGELOG-v1.md)
-  - v1.0 → v1.7.3 完整历史
-  - 当前 ClawHub `thesis-workflow` latest
-- **v2.x 历史**：见 [CHANGELOG-v2.md](./CHANGELOG-v2.md)
-  - v2.0.0 → v2.0.8-beta 完整历史
-  - v1.7.4-v1.7.7 实际为 v2 早期 alpha 版本（commit hash 保留）
-  - 当前 ClawHub `thesis-workflow-v2` latest
-
-## 迁移指南
-
-- **v1 → v1**：标准升级，无破坏
-- **v1 → v2**：**不自动升级**。需手动 `openclaw skills install thesis-workflow-v2`，独立测试后再切换
-- **v2 → v1**：降级需 `openclaw skills remove thesis-workflow-v2` + `install thesis-workflow`
-
-## 选型决策
-
-| 场景 | 推荐版本 |
-|------|----------|
-| 生产环境论文 | v1.7.3（稳定，已验证）|
-| 新功能/新设计尝试 | v2.0.6（新框架，需测试）|
-| 同时跑多篇论文 | 两个都装（互不干扰）|
-
-## 详细历史
-
-- 📄 [CHANGELOG-v1.md](./CHANGELOG-v1.md) — v1.x 完整历史
-- 📄 [CHANGELOG-v2.md](./CHANGELOG-v2.md) — v2.x 完整历史 + alpha 阶段说明
-- 📄 [references/git-workflow.md](./references/git-workflow.md) — 分支管理 + 发布流程
+- 新增 helper：`state_manager_v2._get_outline_nodes()` / `_set_outline_nodes()`
+- orchestrator_v2.py 新增导入：`_get_outline_nodes`
+- outline_parser.py 新增导入：`_get_state_path`, `_get_outline_nodes`, `_set_outline_nodes`
+- `save_content_hints_to_outline` 重写：约 20 行（读+写统一走 helper）
