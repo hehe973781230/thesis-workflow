@@ -528,7 +528,7 @@ def init_orchestrate_state(paper_name: str) -> Dict[str, Any]:
 
     state = {
         "paper_name": paper_name,
-        "phase": "phase1",
+        "phase": "phase1_1",   # phase1_1=初始化，phase1_2=大纲确认，phase1_3=归因确认
         "current_node_id": None,
         "completed_nodes": [],
         "pending_review": [],     # 待用户确认(medium/low)

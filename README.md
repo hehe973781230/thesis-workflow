@@ -13,7 +13,7 @@
 | 版本线 | ClawHub Slug | 当前 latest | 状态 | 文档 |
 |--------|--------------|-------------|------|------|
 | **v1.x**（稳定） | `thesis-workflow` | **v1.7.3** | 长期维护，仅兼容性修复 | [CHANGELOG-v1.md](./CHANGELOG-v1.md) |
-| **v2.x**（新框架） | `thesis-workflow-v2` | **v2.0.15-beta** | ⚠️ 测试版，outline-anchored + 9 HIL + 多工具检索 | [CHANGELOG-v2.md](./CHANGELOG-v2.md) |
+| **v2.x**（新框架） | `thesis-workflow-v2` | **v2.0.16** | ⚠️ 测试版，outline-anchored + 9 HIL + 多工具检索 | [CHANGELOG-v2.md](./CHANGELOG-v2.md) |
 
 ### 选型指南
 

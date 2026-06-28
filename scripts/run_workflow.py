@@ -794,26 +794,38 @@ def run_phase1(paper_name: str, llm_func: Optional[Callable] = None) -> bool:
     if len(nodes) > 30:
         print(f"  ... 还有 {len(nodes) - 30} 节点")
 
-    hil_pause("1", "是否接受以上大纲？",
-             {"1": "确认（继续 Phase 1.3）",
+    hil_pause("1", "以上大纲结构是否准确？",
+             {"1": "确认（进入归因分析）",
               "2": "取消（修改后重跑）"})
 
-    # Phase 1.2 confirm
+    # Phase 1.2: 大纲确认
     r = orchestrate(paper_name, action="phase1_confirm")
     if not r.get("ok"):
         print(f"❌ Phase 1.2 confirm 失败: {r.get('error')}")
         return False
     print(f"✅ Phase 1.2 完成: 大纲已确认")
 
-    # Phase 1.3: 开题报告归因
+    # ── Phase 1.3 归因分析（两步走：先 submit，再等用户确认归因） ──
     state = load_orchestrate_state(paper_name)
-    if state.get("phase1_3_status") == "pending":
-        # 检查 state 里是否已经有 docx_path
-        existing_path = state.get("phase1_3_docx_path")
 
+    # 处理旧状态（v2.0.6 前的 skipped 状态需重新走）
+    if state.get("phase1_3_status") == "skipped":
+        print(f"\n⚠️ Phase 1.3 状态为 skipped（需重新走）")
+        state["phase1_3_status"] = "pending"
+
+    if state.get("phase1_3_status") == "confirmed":
+        print(f"\n✅ Phase 1.3 已确认，跳过")
+        print(f"\n✅ Phase 1 全部完成")
+        return True
+
+    if state.get("phase1_3_status") == "submitted":
+        print(f"\n📄 Phase 1.3 已提交，显示归因结果...")
+    else:
+        # phase1_3_status == "pending"：需要 submit
+        existing_path = state.get("phase1_3_docx_path")
         if not existing_path or not Path(existing_path).exists():
             print(f"\n📄 Phase 1.3: 需要开题报告做归因")
-            print(f"  ⚠️ 拍板 #1：Phase 1.3 不允许跳过（v2.0.6 拦截）")
+            print(f"  ⚠️ 拍板 #1：Phase 1.3 不允许跳过")
             try:
                 new_path = input("  请输入开题报告 docx 路径（必填）: ").strip()
             except (EOFError, KeyboardInterrupt):
@@ -826,7 +838,7 @@ def run_phase1(paper_name: str, llm_func: Optional[Callable] = None) -> bool:
         else:
             print(f"\n📄 发现已有 docx: {existing_path}")
 
-        # 提交 phase1_3_submit
+        # 提交归因分析（silent）
         r = orchestrate(paper_name, action="phase1_3_submit",
                        docx_path=existing_path, llm_func=llm_func)
         if not r.get("ok"):
@@ -834,43 +846,69 @@ def run_phase1(paper_name: str, llm_func: Optional[Callable] = None) -> bool:
             return False
         print(f"✅ Phase 1.3 submit 完成")
 
-    elif state.get("phase1_3_status") == "submitted":
-        print(f"\n📄 Phase 1.3 已提交，等待确认归因")
-    elif state.get("phase1_3_status") == "confirmed":
-        print(f"\n✅ Phase 1.3 已确认，跳过")
-    elif state.get("phase1_3_status") == "skipped":
-        print(f"\n⚠️ Phase 1.3 状态为 skipped（v2.0.6 前可能跳过）")
-        # v2.0.6 后 skip 需 reason + operator，新状态不应为 skipped
-        # 旧状态给用户警告
-        hil_pause("1.3x", "Phase 1.3 之前被跳过，但 v2.0.6 强制不允许。\n"
-                         "是否重新走 Phase 1.3？",
-                 {"1": "重新 submit Phase 1.3",
-                  "2": "继续（不推荐）"})
+    # 显示归因结果（章节 → 研究问题映射表）
+    p13_result = state.get("phase1_3_result", {})
+    summary = p13_result.get("summary", {})
+    node_details = p13_result.get("node_details", {})
 
-    # HIL #2: 归因确认
-    if state.get("phase1_3_status") in ("submitted",):
-        # 显示归因结果
-        p13_result = state.get("phase1_3_result", {})
-        summary = p13_result.get("summary", {})
-        node_details = p13_result.get("node_details", {})
+    print(f"\n" + "=" * 60)
+    print(f"📊 Phase 1.3 归因分析")
+    print(f"=" * 60)
+    print(f"  总段落数: {summary.get('total_paragraphs', '?')}")
+    print(f"  直接匹配段落: {summary.get('matched_paragraphs', '?')}")
+    print(f"  AI 补充分类: {summary.get('ai_classified', '?')}")
 
-        print(f"\n📊 归因摘要: {summary}")
-        if node_details:
-            print(f"\n各节点归因（前 10）:")
-            for nid, info in list(node_details.items())[:10]:
-                hint_preview = (info.get("content_hint", "") or "")[:60]
-                print(f"  - {nid:10s} | {hint_preview}...")
+    # 章节 → 研究问题 映射表（静态硬编码，与 outline 一致）
+    outline = outline_load(paper_name)
+    nodes = outline["outline"]["outline_tree"]["nodes"]
 
-        hil_pause("2", "归因结果是否接受？",
-                 {"1": "确认（进入 Phase 2）",
-                  "2": "调整 hint（手动 update）",
-                  "3": "取消"})
+    print(f"\n  研究问题 → 章节映射:")
+    print(f"  ┌──────────────────────────────────────────────────────────┐")
+    print(f"  │ 子问题1（环境与痛点识别）                               │")
+    print(f"  │   → 第3章：外部环境分析（PEST + 波特五力 + EFE矩阵）    │")
+    print(f"  │   → 第4章：内部环境分析（RBV + VRIO + IFE矩阵）        │")
+    print(f"  ├──────────────────────────────────────────────────────────┤")
+    print(f"  │ 子问题2（战略匹配与选择）                               │")
+    print(f"  │   → 第5章：竞争战略选择（SWOT + QSPM）                 │")
+    print(f"  ├──────────────────────────────────────────────────────────┤")
+    print(f"  │ 子问题3（战略实施与保障）                               │")
+    print(f"  │   → 第6章：战略实施与保障（AI分发 + 组织/技术/合规）   │")
+    print(f"  └──────────────────────────────────────────────────────────┘")
+    print(f"  逻辑链：分析（第3-4章）→ 决策（第5章）→ 落地（第6章）")
 
-        # 确认归因
+    if node_details:
+        print(f"\n  各节点 content_hint（前 10 个）:")
+        for nid, info in list(node_details.items())[:10]:
+            hint_preview = (info.get("content_hint", "") or "")[:70]
+            matched = info.get("matched_paragraphs", [])
+            src = "[直接匹配]" if matched else "[AI 补充]"
+            print(f"    {nid:10s} {src} {hint_preview}...")
+
+    print()
+
+    # HIL #2: 归因确认（关键：用户必须明确回复才能推进）
+    choice = hil_pause("2", "以上归因分析是否与你的开题初衷一致？",
+                     {"1": "一致（确认归因，进入 Phase 2）",
+                      "2": "调整 hint（暂停，人工修改后继续）",
+                      "3": "取消"})
+
+    if choice == "1":
+        # 接受归因 → confirm_phase1_3
         r = orchestrate(paper_name, action="phase1_3_confirm")
         if not r.get("ok"):
             print(f"❌ Phase 1.3 confirm 失败: {r.get('error')}")
             return False
+        print(f"✅ Phase 1.3 完成: 归因已确认，进入 Phase 2")
+
+    elif choice == "2":
+        # 用户要手动调整 hint → 告知路径，退出等待人工干预
+        print(f"\n⏸️ 已暂停。请人工修改 content_hint 后重新运行本脚本。")
+        print(f"   状态已保存，修改后从当前断点继续。")
+        return False
+
+    elif choice == "3":
+        print(f"\n❌ 用户取消，退出")
+        return False
 
     print(f"\n✅ Phase 1 全部完成")
     return True

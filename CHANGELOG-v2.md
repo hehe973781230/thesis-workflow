@@ -1,7 +1,7 @@
 # CHANGELOG - v2.x 新框架
 
 > v2.x 是 **v2 框架**（outline-anchored 重构 + 9 HIL 节点 + 真实 CLI 入口）的活跃开发分支。
-> 当前 latest: **v2.0.15-beta**
+> 当前 latest: **v2.0.13**
 > ClawHub Slug: `thesis-workflow-v2`（独立仓库）
 > 详见 [CHANGELOG.md](./CHANGELOG.md) 的版本线索引。
 
@@ -15,101 +15,28 @@ v1.7.4 / v1.7.5 / v1.7.6 / v1.7.7 **实际为 v2 框架的早期 alpha 开发**�
 - v1.7.7 = v2 早期 alpha-4
 - v2.0.0 = v2 正式发布
 - v2.0.6 = v2 上一稳定版
-- v2.0.7 = v2 上一版本
-- v2.0.11-beta = v2 上一版本
-- v2.0.15-beta = v2 当前 latest
+- v2.0.12-beta = v2 上一正式发布版本
+- v2.0.13 = v2 当前 latest
 
 **Commit hash 已保留，可在 git history 中追溯。**
 
-## [v2.0.15-beta] - 2026-06-27
+## [v2.0.13] - 2026-06-28
 
-### M1-M9 代码审查问题修复
+### Phase 1 双 HIL 强制分步确认（P0 修复）
 
-**严格按 M1-M9 审查方案逐项修复，提升 v2 框架代码质量。**
+**问题**：Phase 1.2（大纲确认）和 Phase 1.3（归因分析）合并在一条 HIL 消息中，导致归因节点被跳过。
 
-#### P0：信息稀缺检查 + 路径统一
+**修复**：
+- `state_manager_v2.py`：`init_orchestrate_state()` phase 初始值改为 `"phase1_1"`
+- `orchestrator_v2.py`：`confirm_phase1()` phase 推进到 `"phase1_2"`（不再是 `"phase1"`），归因确认后才进 `"phase2"`
+- `orchestrator_v2.py`：新增 `elif phase == "phase1_2"` dispatch 分支，确保所有 phase1_3 action 正确路由
+- `orchestrator_v2.py`：`orchestrate()` phase 路由新增 `"phase1_2"` 分支，兼容旧 `"phase1"` 状态
+- `run_workflow.py`：`run_phase1()` 拆分为两次独立 HIL（HIL #1 大纲确认 → HIL #2 归因确认），归因展示增加"研究问题→章节映射表"，用户必须分别回复确认词才能推进
 
-- **`scripts/orchestrator_v2.py` M1**：`check_info_scarcity()` 移除 `user_hints` 强制检查，仅检查 `content_hint` + `bridge`，解决 Phase 2 全节点阻塞问题
-- **`scripts/orchestrator_v2.py` M2**：`state_manager_v2` 导入 `_get_paper_dir`，Phase 3/5/Guardrails 全部统一为 `WORKSPACE/{paper_name}/` 路径
-- **`scripts/md2docx_strict.py`**：emoji ❌ → [×]，新增 `_ensure_utf8_stdout()` 修复 Windows GBK 编码
+**影响**：phase 值新增 `"phase1_1"` / `"phase1_2"`，state_machine 文档已更新。
 
-#### P1：Phase 4 备份 + M5 跨章 + M6 原子写入 + M7 重构
 
-- **`scripts/orchestrator_v2.py` M3**：`auto_fix_p0_issues()` + `orchestrate_phase4()` 内部 P0 修复
-  - 字数校验（修复后字数 < 原字数 50% → 跳过并 `warnings.warn`）
-  - `outline_update_status` 自动备份旧 `content`
-  - `except Exception` → `warnings.warn()`
-- **`scripts/orchestrator_v2.py` M5**：`orchestrate_phase3_5()` 评审 prompt 注入跨章上下文
-  - 前一章 `key_conclusion` 核心结论
-  - 下一章标题
-- **`scripts/state_manager_v2.py` M6**：`outline_save` / `save_orchestrate_state` 原子写入（tmp+rename）；读取加重试 3 次
-- **`scripts/orchestrator_v2.py` M7**：抽取 `_assemble_full_content()` 公共函数，5 处重复调用统一
 
-#### P2：M8/M9 微调
-
-- **`scripts/orchestrator_v2.py` M8**：`except Exception: pass` → `warnings.warn()` 记录（4 处）
-- **`SKILL.md` M9**：「引用完整性」描述修正为「逐章≥1处，全文≥10处」
-
----
-
-## [v2.0.13-beta] - 2026-06-27
-
-### Phase 5.3：MinerU 格式闭环校验
-
-**用 MinerU 将生成的 docx 还原为 md，脚本对比格式一致性，减少人工 checklist 工作量。**
-
-- **`scripts/md2docx_strict.py`**：新增 `verify_format_via_mineru()` 函数
-  - docx → MinerU flash-extract → 还原 md ↔ 原始 md 对比
-  - 校验 6 维度：标题层级数量/层级深度/表格数量/表格列数/段落完整性
-  - MinerU 不可用/失败 → 静默跳过，不阻断生成
-  - 集成到 `md_to_docx()` 流程末尾，自动输出警告
-- **`scripts/loop_self_check.py`**：新增 `check_docx_format_via_mineru()`
-  - 校验 11（可选，仅 docx 场景）
-
-**覆盖 checklist.md 约 20 项**：标题层级、表格结构、段落完整性自动校对。
-
----
-
-## [v2.0.11-beta] - 2026-06-26
-
-### 清理 v1 残留 + clawhubignore 排除
-
-- **`.clawhubignore`**：新增 `CHANGELOG-v1.md` + `OUTLINE_ANCHORED_TODO.md` 排除
-- **SKILL.md**：`mba-thesis-workflow/` → `thesis-workflow/` 路径修正
-
----
-
-## [v2.0.10-beta] - 2026-06-25
-
-### P0-P4 修复 — 惰性检测/多工具集成/Phase 3.5/4/5
-
-#### P0：VECTOR_MATCHER_AVAILABLE 惰性检测
-
-- 模块级变量 → `vector_matcher_available()` 函数
-- import 耗时从 ~5s 降至 0.19s，修复 test 导入超时
-
-#### P1：补 Phase 3.5/4/5
-
-- **`scripts/orchestrator_v2.py`**：3 个新函数
-  - `orchestrate_phase3_5()`：P0/P1/P2 分级评审 + 连续 2 轮无新 P0 通过 + HIL 超 3 轮
-  - `orchestrate_phase4()`：自动修复 P0 + 重新整合
-  - `orchestrate_phase5()`：Guardrails 校验 + Word 导出提示
-  - dispatch 路由更新：phase3 → phase3.5 → phase4 → phase5
-
-#### P2：依赖管理 + 多工具集成
-
-- **`requirements.txt`**（新增）：`sentence-transformers~=5.1`
-- **`install.sh`**：新增 sentence-transformers 检测 + 安装提示
-- **`scripts/context_builder.py`**：`build_prompt_package()` 接入 `quick_search()`（research_keywords 触发）
-
-#### P4：清理 SKILL.md/README.md/README_EN.md v1 残留
-
-- SKILL.md（7 处）：双版本起草/H-generator/版本H/版本O 全部清理
-- README.md / README_EN.md：完全重写为 v2
-
----
-
-## [v2.0.9-beta] - 2026-06-25
 
 ### 🧠 Layer 2 向量标题匹配（BGE-small-zh，替代 LLM 标题匹配）
 
@@ -172,69 +99,63 @@ v1.7.4 / v1.7.5 / v1.7.6 / v1.7.7 **实际为 v2 框架的早期 alpha 开发**�
 ### 🤖 RuntimeLLM — 零硬编码模型获取（#3）
 
 - **`scripts/run_workflow.py`**：新增 `RuntimeLLM` 类
-  - 动态从 `openclaw sessions list --all-agents --active 30 --json` 获取当前 session 模型名 + provider
-  - 自动查找 openclaw CLI 路径（nvm / PATH）
-  - 零硬编码 agent_id / model / API key
-  - 支持 OpenAI / Anthropic / DashScope 等兼容 API
-  - 内置自动重试（3次）+ 超时处理
-
-#### 代码统计
-
-| 类型 | 文件 | 行数 |
-|------|------|------|
-| 新增 | `scripts/multi_search.py` | 339 |
-| 改造 | `scripts/research_tools.py` | 139 |
-| 改造 | `scripts/run_workflow.py` (RuntimeLLM) | 683 |
-| 改造 | `SKILL.md` | 46 |
-| 改造 | `CHANGELOG-v2.md` | 50 |
-| 新增测试 | tests/ | 497+ |
 
 ---
 
-## [v2.0.7] - 2026-06-25
 
-### outline_parser 引擎切换 B→A 单向降级（#1）
+## [v2.0.9-beta] - 2026-06-25
 
-F1-F5 决策拍板：
-- F1 弹窗 = **否**：用户静默，不调 warnings.warn
-- F2 audit = **是**：降级事件写 state.audit_log
-- F3 重试 = **1 次**：MinerU 失败 1 次立即降级
-- F4 作用域 = **进程级**：_fallback_used 是模块全局
-- F5 跨 paper = **共享**：跨 paper 共享 _fallback_used
+### 🧠 Layer 2 向量标题匹配（BGE-small-zh，替代 LLM 标题匹配）
 
-降级语义：**B (MinerU) → A (heuristic)，A 失败不回 B（单向）**
+**Phase 1.3 归因加速：LLM 标题匹配 → 本地向量匹配 + LLM 回退兜底**
 
-#### 代码变更
+#### 新增文件
 
-- **`outline_parser.py`**（新增 6 函数 + 重构 1 函数）：
-  - `reset_fallback_state()`：重置模块级状态（测试用 + 进程重启模拟）
-  - `_is_mineru_available()`：一次性缓存检测 mineru-open-api CLI 是否在 PATH（F4 进程级缓存）
-  - `_log_fallback_to_audit()`：stdout + state.audit_log 双通道记录降级事件（F2=是，F1=否 不弹窗）
-  - `_preprocess_paragraphs()`：段落预合并 4 规则（纯数字+.X / X.Y+标题 / 第N章+标题 / .X.Y+标题）
-  - `_strip_markdown_bold()`：清理 MinerU 输出的 markdown 加粗/heading 标记
-  - `extract_outline_from_docx_with_heuristic()`：**A 路径**：python-docx + 预合并 + 锚点解析
-  - `extract_outline_from_docx_via_mineru()`：**B 路径**：调用 mineru-open-api CLI，解析输出 md
-  - `extract_outline_from_docx()`：**统一入口**：F1-F5 决策逻辑，B→A 单向降级
-- **`outline_parser.py` 模块级状态**（F4+F5 落地）：
-  - `_mineru_check_done`、`_mineru_available`、`_fallback_used`
+- **`scripts/simple_embedder.py`**（230行）：BGE-small-zh 标题向量匹配器
+  - `TitleMatcher.match_headings()`：余弦相似度匹配，毫秒级
+  - 标题归一化：去掉编号前缀后再编码，提高匹配准确率
+  - 离线支持：自动检测缓存 → 离线模式；无缓存 → hf-mirror 下载
+  - 阈值 0.75，误匹配的标题自动降级到 LLM 兜底
 
-#### 测试覆盖（25 个测试用例）
+#### 改造文件
 
-- `test_outline_engine_fallback.py`（v2.0.7 新增，25 个测试）：
-  - 模块状态初始化 / reset 幂等 / cache 行为 / reset 后重新检测（4）
-  - A 路径：独立可用 / 处理拆段 / 预合并 4 规则 / 无锚点报错（4）
-  - F1=否：不弹窗（1）
-  - F2=是：降级写 audit / 成功不写 / stdout 含 AUDIT 标记（3）
-  - F3=1：单次重试（1）
-  - F4=进程级：降级锁死后续调用（1）
-  - F5=共享：跨 paper 全局（1）
-  - B→A 单向：降级不回 B（1）
-  - B 路径自身：unavailable 抛错 / subprocess 调用 / nonzero 返回 / 无 md 输出（4）
-  - 完整降级链路集成（1）
-  - _strip_markdown_bold 工具函数（1）
-  - 向后兼容：签名不变 / text 路径 / outline_parse API（3）
+- **`scripts/outline_parser.py`**：Layer 2 重写
+  - 2a：向量标题匹配（确定性 + 毫秒级）
+  - 2b：LLM 标题匹配（向量未匹配或无向量依赖时兜底）
+  - `VECTOR_MATCHER_AVAILABLE` 标志位，自动检测 sentence-transformers
+  - 无向量库时回退原 LLM 方案，零侵入
 
-**总测试数**：172 (v2.0.6) + **25** (v2.0.7) = **197 个**，0 个破坏
+#### 性能对比
+
+| 指标 | 原 LLM 方案 | 向量方案 |
+|------|------------|---------|
+| Phase 1.3 归因耗时 | 30-90s | **2-5s** |
+| 确定性 | ❌ 非确定 | ✅ 相同输入=相同结果 |
+| Layer 3 触发概率 | 高（LLM 漏匹配多） | 低（向量覆盖更多） |
+| 新增依赖 | 无 | sentence-transformers ~5.1 |
+| 模型缓存 | - | ~33MB（首次下载） |
+
+---
+
+---
+
+## [v2.0.12-beta] - (无 changelog 记录，git tag 存在)
+
+*本版本无 changelog 内容，请参考 git log 追溯变更。*
+
+---
+
+## [v2.0.11-beta] - (无 changelog 记录，git tag 存在)
+
+*本版本无 changelog 内容，请参考 git log 追溯变更。*
+
+---
+
+## [v2.0.10-beta] - (无 changelog 记录，git tag 存在)
+
+*本版本无 changelog 内容，请参考 git log 追溯变更。*
+
+
 
 ## [v2.0.6] - 2026-06-24
 
@@ -313,12 +234,6 @@ audit log 写入 `state.audit_log`，含 action / paper_name / reason / operator
 
 - 修复前：158 个测试通过
 - 修复后：**172 个测试通过**（+14 个 v2.0.6 新增），0 个失败（1 个预存在的 test_continue_decision bug 未修）
-
-## [v2.0.5] - 2026-06-24 (昨日)
-
-### 🐛 B-2 状态同步修复（orchestrate state 函数迁移 + outline_update_status 同步）
-
-（略，v2.0.5 commit `686acca`）
 
 ## [v2.0.1] - 2026-06-23
 

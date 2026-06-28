@@ -347,18 +347,18 @@ def confirm_phase1(paper_name: str) -> Dict[str, Any]:
         return {"ok": True, "message": "目录已确认"}
 
     state["phase1_confirmed"] = True
-    # 拍板 #1 强制 + #2 方案 B 枚举字段:保持 phase = "phase1",
-    # 通过 phase1_3_status 推进子阶段
+    # 拍板 #1 强制 + #2 方案 B 枚举字段:
+    # 大纲确认(Phase 1.2)后推进到 phase1_2，归因确认(Phase 1.3)后才进 phase2
     state["phase1_3_status"] = "pending"   # 初始 pending,需用户提交 docx
-    state["phase"] = "phase1"              # 主阶段仍是 phase1
+    state["phase"] = "phase1_2"            # 大纲确认后进入 phase1_2，等归因确认
 
     save_orchestrate_state(paper_name, state)
 
     return {
         "ok": True,
-        "phase": "phase1",
+        "phase": "phase1_2",
         "phase1_3_status": "pending",
-        "message": "目录已确认,下一步:进入 Phase 1.3 开题报告归因"
+        "message": "目录已确认(Phase 1.2 完成)，请核对下方归因分析(Phase 1.3)"
     }
 
 
@@ -1976,16 +1976,25 @@ def orchestrate(paper_name: str,
                 }
         elif not state.get("phase1_confirmed"):
             phase = "phase1"
+        elif state["phase"] == "phase1_2":
+            # Phase 1.2 确认后 → 归因分析（两步：submit → 确认）
+            # run_workflow.py 已在 HIL #1 后显式调用 phase1_3_submit + phase1_3_confirm
+            # 此处仅处理路由：pending/submitted → phase1_3, confirmed → phase2
+            p13_status = state.get("phase1_3_status")
+            if p13_status == "confirmed":
+                phase = "phase2"
+            else:
+                # pending / submitted: 由 run_workflow.py 中的显式调用处理
+                # orchestrate() 自身不自动推进，保持 phase1_2
+                phase = "phase1_2"
         elif state["phase"] == "phase1":
-            # 拍板 #1 强制:Phase 1.2 确认后必须走 Phase 1.3
+            # 兼容 v2.0.6 前旧状态（phase = "phase1"）
             p13_status = state.get("phase1_3_status")
             if p13_status == "confirmed":
                 phase = "phase2"
             elif p13_status == "submitted":
-                # 需要用户确认归因
                 phase = "phase1"
             else:
-                # pending:需提交开题报告
                 phase = "phase1"
         else:
             phase = state.get("phase", "phase2")
@@ -2033,6 +2042,33 @@ def orchestrate(paper_name: str,
         else:
             # 默认:Phase 1.2 提示确认
             return orchestrate_phase1(paper_name, **kwargs)
+
+    elif phase == "phase1_2":
+        # phase1_2: 大纲已确认，等归因确认
+        # 所有 phase1 action 在此分支均合法（submit/confirm/update_hint）
+        if action == "phase1_3_submit":
+            docx_path = kwargs.get("docx_path")
+            return orchestrate_phase1_3(paper_name, docx_path, llm_func)
+        elif action == "phase1_3_confirm":
+            return confirm_phase1_3(paper_name)
+        elif action == "phase1_3_update_hint":
+            node_id = kwargs.get("node_id")
+            new_hint = kwargs.get("new_hint")
+            if not node_id or new_hint is None:
+                return {"ok": False, "error": "phase1_3_update_hint 需要 node_id 和 new_hint"}
+            return update_node_content_hint(paper_name, node_id, new_hint)
+        elif action == "phase1_3_skip":
+            return {
+                "ok": False,
+                "error": "拍板 #1 强制:Phase 1.3 不允许跳过。",
+                "blocked_action": "phase1_3_skip",
+                "required_action": "phase1_3_submit"
+            }
+        else:
+            return {
+                "ok": False,
+                "error": f"phase1_2 状态暂只支持 phase1_3_submit/confirm/update_hint，当前 action={action}"
+            }
 
     elif phase == "phase2":
         if not llm_func:
