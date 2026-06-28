@@ -713,12 +713,13 @@ def get_next_writing_node(paper_name: str, state: Dict) -> Optional[str]:
         # 首次,从第一个开始
         return node_ids[0] if node_ids else None
 
-    # 从 current 之后找下一个未完成的
+    # 从 current 之后找下一个未完成的（排除 completed + failed）
     try:
         idx = node_ids.index(current)
+        failed = set(state.get("failed_nodes", []))
         for i in range(idx + 1, len(node_ids)):
             nid = node_ids[i]
-            if nid not in state["completed_nodes"]:
+            if nid not in state["completed_nodes"] and nid not in failed:
                 return nid
         return None  # 全部完成
     except ValueError:
@@ -875,9 +876,8 @@ def write_single_node(paper_name: str, node_id: str,
         }
 
     # Step 5: 评审
-    # 先获取带 content 的节点(评审需要读取 content)
-    node = outline_get_node(paper_name, node_id)
-    node["content"] = content_clean
+    # review_node() 内部会从磁盘加载节点内容（Step 4 已通过 outline_update_status 写入）
+    # 无需在此手动修改内存中的 node 字典
 
     # 调用评审(注入 mock outline_get_node)
     def mock_llm(prompt: str) -> str:
@@ -1059,6 +1059,8 @@ def handle_review_decision(paper_name: str, node_id: str,
     elif decision == "rewrite":
         # 打回重写(从 pending 中移除,不加入 completed,下次会重新生成)
         state["pending_review"].remove(node_id)
+        # 重置 outline writing_status 为 pending（清除 reviewing 状态）
+        outline_update_status(paper_name, node_id, "pending")
         # 不加入 completed_nodes,下次会重新生成
 
     save_orchestrate_state(paper_name, state)

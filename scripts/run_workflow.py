@@ -1010,8 +1010,27 @@ def run_phase2(paper_name: str, llm_func: Callable) -> bool:
 
             elif choice == "2":
                 # 重写：调 write_single_node 一次（bypass_scarcity=True 跳过信息检查）
-                write_single_node(paper_name, next_node_id, llm_func, bypass_scarcity=True)
-                print(f"  🔄 {next_node_id} 已重写")
+                rewrite_result = write_single_node(paper_name, next_node_id, llm_func, bypass_scarcity=True)
+                rewrite_action = rewrite_result.get("action")
+                if rewrite_action == "completed":
+                    # 重写后评审 high → 直接 completed
+                    from state_manager_v2 import outline_update_status
+                    outline_update_status(paper_name, next_node_id, "completed", force=True)
+                    state = load_orchestrate_state(paper_name)
+                    if next_node_id not in state.get("completed_nodes", []):
+                        state["completed_nodes"].append(next_node_id)
+                    if next_node_id in state.get("pending_review", []):
+                        state["pending_review"].remove(next_node_id)
+                    from state_manager_v2 import update_progress
+                    update_progress(state)
+                    save_orchestrate_state(paper_name, state)
+                    print(f"  ✅ {next_node_id} 重写后评审通过")
+                elif rewrite_action == "pending_review":
+                    # 重写后仍 medium/low → 保持 pending_review，等用户再次决策
+                    print(f"  🔄 {next_node_id} 已重写，仍需确认（质量: {rewrite_result.get('review_result', {}).get('quality', 'medium')}）")
+                else:
+                    # error 或 needs_user_input
+                    print(f"  ⚠️ {next_node_id} 重写异常: {rewrite_result.get('error', rewrite_action)}")
 
             elif choice == "3":
                 # 跳过

@@ -602,9 +602,11 @@ def sync_orchestrate_state_from_outline(paper_name: str, node_id: str, status: s
         update_progress(orchestrate_state)
 
         save_orchestrate_state(paper_name, orchestrate_state)
-    except Exception:
-        # 任何异常都不影响主流程(outline state 已写入)
-        pass
+    except Exception as e:
+        # 同步失败不影响主流程(outline state 已写入)，但记录警告
+        import warnings
+        warnings.warn(f"sync_orchestrate_state_from_outline 同步失败（节点 {node_id}, 状态 {status}）: {e}，"
+                      f"orchestrate_state 可能与 outline_state 不一致，建议检查")
 
 
 if __name__ == "__main__":
