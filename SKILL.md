@@ -4,6 +4,7 @@ description: "v2 新框架（beta）：Phase 3.5/4/5 + BGE向量匹配 + multi-s
 metadata:
   clawdbot:
     emoji: "📝"
+    version: "2.1.0-beta.1"   # 单一真实来源，发布前必须先改这里。发布规则见 scripts/release.py
     requires: {}
     os: ["linux", "darwin", "win32"]
 ---
