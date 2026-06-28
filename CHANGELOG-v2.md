@@ -1,7 +1,7 @@
 # CHANGELOG - v2.x 新框架
 
 > v2.x 是 **v2 框架**（outline-anchored 重构 + 9 HIL 节点 + 真实 CLI 入口）的活跃开发分支。
-> 当前 latest: **v2.0.13**
+> 当前 latest: **v2.0.14**
 > ClawHub Slug: `thesis-workflow-v2`（独立仓库）
 > 详见 [CHANGELOG.md](./CHANGELOG.md) 的版本线索引。
 
@@ -15,8 +15,8 @@ v1.7.4 / v1.7.5 / v1.7.6 / v1.7.7 **实际为 v2 框架的早期 alpha 开发**�
 - v1.7.7 = v2 早期 alpha-4
 - v2.0.0 = v2 正式发布
 - v2.0.6 = v2 上一稳定版
-- v2.0.12-beta = v2 上一正式发布版本
-- v2.0.13 = v2 当前 latest
+- v2.0.13 = v2 上一正式发布版本
+- v2.0.14 = v2 当前 latest
 
 **Commit hash 已保留，可在 git history 中追溯。**
 
