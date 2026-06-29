@@ -85,6 +85,7 @@ class RuntimeLLM:
     def __init__(self, agent_id: Optional[str] = None):
         self._session_info: Optional[Dict] = None
         self._lock = threading.Lock()
+        self._agent_id = agent_id  # 保存传入的 agent_id，用于精确限定 session 查询
 
     # ---- 内部：获取当前 agent 的 openclaw 可执行文件路径 ----
     @staticmethod
@@ -109,19 +110,26 @@ class RuntimeLLM:
     # ---- 内部：从当前运行 session 获取模型信息 ----
     def _get_session_info(self) -> Dict:
         """
-        通过 openclaw sessions list --all-agents --active 30 获取当前 session 信息。
+        通过 openclaw sessions list --agent <agent_id> --active 30 获取当前 session 信息。
 
-        零硬编码：不传 --agent 参数，由 Gateway 自动识别当前调用者 session。
+        用 --agent 精确限定为当前 agent，避免 background 场景下 sessions[0] 指向其他 agent。
         """
         try:
             openclaw_path = self._find_openclaw()
-            result = subprocess.run(
-                [openclaw_path, "sessions", "list",
-                 "--all-agents",
-                 "--active", "30",
-                 "--json"],
-                capture_output=True, text=True, timeout=10
-            )
+
+            # 构造命令：用 --agent 精确限定，避免 sessions[0] 误取其他 agent 的 session
+            cmd = [
+                openclaw_path, "sessions", "list",
+                "--active", "30",
+                "--json"
+            ]
+            if self._agent_id:
+                cmd.extend(["--agent", self._agent_id])
+            else:
+                # 无 agent_id 时退化使用 --all-agents，但注释说明风险
+                cmd.append("--all-agents")
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if result.returncode != 0:
                 raise RuntimeError(f"openclaw sessions list failed: {result.stderr}")
 
@@ -130,18 +138,25 @@ class RuntimeLLM:
             if not sessions:
                 raise RuntimeError("未找到活跃 session（30分钟内）")
 
-            # sessions[0] 就是当前调用者的 session（Gateway 自动路由）
+            # 已通过 --agent 精确限定，当前 agent 的 session 必在 sessions[0]
             current = sessions[0]
             session_key = current.get("key", "")  # e.g. agent:zz:feishu:direct:ou_xxx
 
             # 从 session key 解析 agent_id
             parts = session_key.split(":")
-            agent_id = parts[1] if len(parts) >= 2 else "unknown"
+            resolved_agent_id = parts[1] if len(parts) >= 2 else "unknown"
+
+            # 防御性校验：若传入了 agent_id 但解析结果不匹配，说明路由异常
+            if self._agent_id and resolved_agent_id != self._agent_id:
+                raise RuntimeError(
+                    f"session agent 不匹配：期望 {self._agent_id}，实际 {resolved_agent_id}。"
+                    f"session_key={session_key}"
+                )
 
             return {
                 "model": current.get("model", ""),
                 "provider": current.get("modelProvider", ""),
-                "agent_id": agent_id,
+                "agent_id": resolved_agent_id,
                 "session_key": session_key,
             }
         except subprocess.TimeoutExpired:
@@ -303,11 +318,14 @@ class RuntimeLLM:
 _runtime_llm: Optional[RuntimeLLM] = None
 
 
-def get_runtime_llm() -> RuntimeLLM:
-    """获取 RuntimeLLM 全局单例"""
+def get_runtime_llm(agent_id: Optional[str] = None) -> RuntimeLLM:
+    """获取 RuntimeLLM 全局单例
+
+    agent_id 仅在首次创建时生效；已创建则忽略（保持单例行为）。
+    """
     global _runtime_llm
     if _runtime_llm is None:
-        _runtime_llm = RuntimeLLM()
+        _runtime_llm = RuntimeLLM(agent_id=agent_id)
     return _runtime_llm
 
 
@@ -716,7 +734,7 @@ def get_paper_status(paper_name: str) -> Optional[Dict[str, Any]]:
     """打印当前 paper 状态"""
     state = load_orchestrate_state(paper_name)
     if not state:
-        print(f"❌ 论文 {paper_name} 状态文件不存在")
+        print(f"⚠️ 论文 {paper_name} 状态文件不存在（尚未初始化）")
         return None
 
     print(f"=== {paper_name} 状态 ===")
@@ -1180,6 +1198,11 @@ def main():
     print(f"  模式: {args.phase}")
 
     # ── Pre-flight Check ──────────────────────────────────────
+    # --status 是纯查询，不需要检查依赖，提前处理
+    if args.status:
+        get_paper_status(paper_name)
+        return 0
+
     can_proceed, deps, needs_ai_deps = preflight_check()
     if not can_proceed:
         return 1
@@ -1198,16 +1221,12 @@ def main():
         print("=" * 60)
         return 2  # 返回特殊码，告知调用方需要 AI 介入
 
-    if args.status:
-        get_paper_status(paper_name)
-        return 0
-
     llm_func = None
 
     if args.phase in ("phase1", "auto"):
         # Phase 1.3 需要 llm_func
         try:
-            rllm = get_runtime_llm()
+            rllm = get_runtime_llm(agent_id=args.agent_id)
             if args.llm:
                 # 用户指定了模型
                 model = args.llm
@@ -1238,12 +1257,12 @@ def main():
         if not llm_func:
             if args.llm:
                 # 用户指定了模型名
-                llm_func = get_runtime_llm().make_llm_func(model=args.llm)
+                llm_func = get_runtime_llm(agent_id=args.agent_id).make_llm_func(model=args.llm)
                 print(f"✅ 使用指定模型: {args.llm}")
             else:
                 # 自动从 session 获取
                 try:
-                    rllm = get_runtime_llm()
+                    rllm = get_runtime_llm(agent_id=args.agent_id)
                     model = rllm.current_model()
                     llm_func = rllm.make_llm_func()
                     print(f"✅ 自动使用当前 session 模型: {model}")
