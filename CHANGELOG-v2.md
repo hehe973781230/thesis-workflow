@@ -1,7 +1,7 @@
 # CHANGELOG - v2.x 新框架
 
 > v2.x 是 **v2 框架**（outline-anchored 重构 + 9 HIL 节点 + 真实 CLI 入口）的活跃开发分支。
-> 当前 latest: **v2.1.1-beta.1**
+> 当前 latest: **v2.1.1-beta.2**
 > ClawHub Slug: `thesis-workflow-v2`（独立仓库）
 > 详见 [CHANGELOG.md](./CHANGELOG.md) 的版本线索引。
 
@@ -19,6 +19,19 @@ v1.7.4 / v1.7.5 / v1.7.6 / v1.7.7 **实际为 v2 框架的早期 alpha 开发**�
 - v2.0.14 = v2 当前 latest
 
 **Commit hash 已保留，可在 git history 中追溯。**
+
+## [v2.1.1-beta.2] - 2026-06-30
+
+### 新增：同级章节横向上下文注入（MECE 保障）
+
+- 新增 `build_sibling_chapter_context()` 函数（`context_builder.py`）：
+  - 列出同父节点下所有同级章节的 `node_id`、`title`、`content_hint`
+  - 无 `content_hint` 的章节仅标注标题
+  - 自动生成【本章范围界定】，明确 ✅ 负责内容和 ❌ 不应重复的内容
+- 新增 `_infer_scope_boundary()` 辅助函数，基于语义关键词对（MECE 互斥检测）
+- `build_prompt_package()` 接入 `sibling_context` 字段
+- `build_prompt_package_text()` 输出同级章节预览块
+- SKILL.md 新增「同级章节横向上下文注入」章节
 
 ## [v2.1.1-beta.1] - 2026-06-30
 

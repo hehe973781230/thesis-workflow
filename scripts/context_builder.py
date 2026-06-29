@@ -270,6 +270,199 @@ def get_word_count_range(level: int) -> Dict[str, int]:
 
 
 # ============================================================
+# 同级章节横向上下文注入（MECE 边界划定）
+# ============================================================
+
+def _get_node_status_tag(status: str) -> str:
+    """根据节点状态返回标签"""
+    if status == "completed":
+        return "【已完成】"
+    elif status == "writing":
+        return "【正在写】"
+    else:
+        return "【待写】"
+
+
+def _infer_scope_boundary(current_node: Dict, sibling: Dict, parent_id: str) -> str:
+    """
+    根据当前节点和同级节点的标题语义，自动生成 MECE 边界界定。
+    返回 "✅"（本章负责）或 "❌"（本章不负责）或 ""（无关）
+    """
+    current_title = current_node.get("title", "")
+    sibling_title = sibling.get("title", "")
+    current_l3 = current_node.get("level", 0) == 3
+
+    # 通用互斥关键词对（语义互斥，同级章节不会重复）
+    # 如果当前节点和同级节点都包含同一高层级关键词，说明有边界重叠风险
+    mutex_pairs = [
+        # SWOT 内部互斥
+        (["优势", "strength"], ["劣势", "weakness"]),
+        (["机会", "opportunity"], ["威胁", "threat"]),
+        # 战略选择类互斥
+        (["成本领先", "cost leadership"], ["差异化", "differentiation"]),
+        (["集中化", "focus", "集中"], ["成本领先", "差异化"]),
+        # 实施类互斥
+        (["实施", "路径", "行动计划"], ["保障", "组织架构", "资源配置"]),
+        # 结论类
+        (["结论", "总结"], ["背景", "现状", "分析"]),
+    ]
+
+    def contains_any(text: str, keywords: list) -> bool:
+        return any(k.lower() in text.lower() for k in keywords)
+
+    for pos_kw, neg_kw in mutex_pairs:
+        current_has_pos = contains_any(current_title, pos_kw)
+        sibling_has_neg = contains_any(sibling_title, neg_kw)
+        sibling_has_pos = contains_any(sibling_title, pos_kw)
+        current_has_neg = contains_any(current_title, neg_kw)
+
+        # 如果同级章节包含当前章节的"不应该写"的关键词 → 标记 ❌
+        if current_has_pos and sibling_has_neg:
+            return "❌"
+        if current_has_neg and sibling_has_pos:
+            return "❌"
+
+    # 如果是 L3 节点，同级 L3 之间各自负责自己的分析维度
+    if current_l3:
+        return ""
+
+    # L2 节点：检查是否有明显的边界重叠
+    # 例如：5.1 SWOT分析 和 5.2 竞争战略选择 → 5.1 负责分析，5.2 负责选择
+    overlap_pairs = [
+        (["swot", "分析"], ["战略", "选择", "定位"]),
+        (["内部", "环境", "资源", "能力"], ["外部", "环境", "pestel", "五力"]),
+        (["实施", "路径"], ["保障", "组织", "激励"]),
+    ]
+
+    for a_kw, b_kw in overlap_pairs:
+        curr_in_a = contains_any(current_title, a_kw)
+        sib_in_b = contains_any(sibling_title, b_kw)
+        if curr_in_a and sib_in_b:
+            return "✅"
+        sib_in_a = contains_any(sibling_title, a_kw)
+        curr_in_b = contains_any(current_title, b_kw)
+        if sib_in_a and curr_in_b:
+            return "❌"
+
+    return ""
+
+
+def build_sibling_chapter_context(paper_name: str, node_id: str) -> str:
+    """
+    构建同级章节预览上下文，用于 MECE 边界划定。
+
+    返回格式化的字符串，供注入 prompt 使用。
+
+    输出示例：
+    【同级章节预览】（本章：5.1 SWOT分析）
+
+     5.2 竞争战略选择
+     → 方向：基于SWOT结论，对比成本领先/差异化/集中化三种战略优劣势
+
+     5.3 战略实施路径
+     → 方向：[无content_hint，仅标题]
+
+    【本章范围界定】
+     ✅ 5.1 负责：S/W/O/T四象限分析，各要素打分
+     ❌ 5.2 负责：战略对比与选择结论（不要在5.1写最终战略结论）
+     ❌ 5.3 负责：实施路径和执行细节（5.1 只需提出战略方向雏形）
+    """
+    # 动态导入避免循环依赖
+    try:
+        from .state_manager_v2 import outline_load, outline_get_node, outline_get_context
+    except ImportError:
+        from state_manager_v2 import outline_load, outline_get_node, outline_get_context
+
+    state = outline_load(paper_name)
+    if not state:
+        return ""
+
+    nodes = state.get("outline", {}).get("outline_tree", {}).get("nodes", [])
+    if not nodes:
+        # 兼容旧结构
+        nodes = state.get("outline", {}).get("nodes", [])
+
+    node_map = {n["id"]: n for n in nodes}
+    current = node_map.get(node_id)
+    if not current:
+        return ""
+
+    parent_id = current.get("parent_id")
+    level = current.get("level", 0)
+
+    # 确定父节点（用于找同级节点）
+    if level == 1:
+        # 一级章节：同级即其他一级章节
+        siblings = [n for n in nodes if n.get("level") == 1 and n["id"] != node_id]
+        parent_title = None
+    else:
+        # 非一级章节：通过 parent_id 找同级
+        if parent_id:
+            parent_node = node_map.get(parent_id)
+            parent_title = parent_node["title"] if parent_node else None
+            sibling_ids = parent_node.get("children_ids", []) if parent_node else []
+            siblings = [node_map[sid] for sid in sibling_ids if sid in node_map and sid != node_id]
+        else:
+            siblings = []
+            parent_title = None
+
+    if not siblings:
+        return ""
+
+    lines = []
+    chapter_label = f"（本章：{current['title']}）"
+    if parent_title:
+        chapter_label = f"（本章：{parent_title} / {current['title']}）"
+
+    lines.append(f"【同级章节预览】{chapter_label}")
+    lines.append("")
+
+    # 收集边界界定
+    scope_lines = []
+    scope_lines.append("【本章范围界定】")
+
+    for sibling in siblings:
+        sid = sibling["id"]
+        stitle = sibling["title"]
+        hint = sibling.get("content_hint", "").strip()
+        status = sibling.get("writing_status", "")
+        status_tag = _get_node_status_tag(status)
+
+        if hint:
+            direction = f"方向：{hint}"
+        else:
+            direction = "方向：[无content_hint，仅标题]"
+
+        lines.append(f" {sid} {stitle}")
+        lines.append(f" → {direction} {status_tag}")
+        lines.append("")
+
+        # 自动生成边界界定
+        boundary = _infer_scope_boundary(current, sibling, parent_id)
+        if boundary:
+            scope_lines.append(f" {boundary} {sid}：{stitle}")
+
+    # 去重 + 保留空行
+    scope_lines = [l for l in scope_lines if l.strip()]  # 去掉空行
+
+    # 如果当前节点负责某项关键边界，加上自我说明
+    # 检查 current 是否应该在 scope_lines 中
+    current_has_responsibility = any(
+        _infer_scope_boundary(sibling, current, parent_id) == "✅"
+        for sibling in siblings
+    )
+    if current_has_responsibility and parent_title:
+        scope_lines.insert(
+            1,
+            f" ✅ 本章（{current['title']}）负责：{parent_title} 核心分析内容"
+        )
+
+    lines.extend(scope_lines)
+
+    return "\n".join(lines)
+
+
+# ============================================================
 # 目录位置展示（动态读取）
 # ============================================================
 
@@ -387,6 +580,9 @@ def build_prompt_package(paper_name: str, node_id: str) -> Dict[str, Any]:
     # 增强项4: content_hint 字段（从 outline_state 节点字段读取，开题报告提取或用户手写）
     content_hint = current.get("content_hint", "").strip()
 
+    # 8. 同级章节横向上下文（MECE 边界划定）
+    sibling_context = build_sibling_chapter_context(paper_name, node_id)
+
     package = {
         "ok": True,
         "writing_instruction": f"请生成「{current['title']}」的内容",
@@ -402,6 +598,7 @@ def build_prompt_package(paper_name: str, node_id: str) -> Dict[str, Any]:
         "ending_hint": ending_hint,  # 可能为 null
         "content_hint": content_hint,  # 增强项4: 开题报告提取或用户手写
         "search_context": search_context,  # v2.0.9 多工具检索补充
+        "sibling_context": sibling_context,  # 同级章节横向上下文（MECE 边界划定）
         "word_count_min": word_range["min"],
         "word_count_max": word_range["max"],
         "writing_style": "学术论文",
@@ -444,6 +641,9 @@ def build_prompt_package_text(package: Dict) -> str:
     if package.get('content_hint'):
         parts.append(f"\n## 开题报告方向参考\n")
         parts.append(f"{package['content_hint']}\n")
+
+    if package.get('sibling_context'):
+        parts.append(f"\n{package['sibling_context']}\n")
 
     if package.get('search_context'):
         parts.append(f"\n## 行业/学术数据参考（多工具检索）\n")

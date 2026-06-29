@@ -4,7 +4,7 @@ description: "v2.1（测试版）：新增版本管理策略（方案一+选项B
 metadata:
   clawdbot:
     emoji: "📝"
-    version: "2.1.1-beta.1"   # 单一真实来源，发布前必须先改这里。发布规则见 scripts/release.py
+    version: "2.1.1-beta.2"   # 单一真实来源，发布前必须先改这里。发布规则见 scripts/release.py
     requires: {}
     os: ["linux", "darwin", "win32"]
 ---
@@ -176,6 +176,30 @@ Orchestrator 遍历 outline 树中的每个节点，调用 `write_single_node()`
 - 分析维度建议（规则推导）
 - 开题报告方向参考（content_hint）
 - 行业数据参考（quick_search 多工具检索）
+- **同级章节横向上下文（MECE 边界划定）**（新增 v2.1.1）
+
+#### 同级章节横向上下文注入（MECE 保障）
+
+通过 `build_sibling_chapter_context()` 自动注入同级章节预览，实现 MECE 边界划定：
+- 列出同父节点下所有同级章节的 `node_id`、`title`、`content_hint`
+- 无 `content_hint` 的章节仅标注标题
+- 自动生成【本章范围界定】，明确 ✅ 负责内容和 ❌ 不应重复的内容
+- 作用：避免同级章节重复、MECE 原则可落地执行
+
+输出示例：
+```plain_text
+【同级章节预览】（本章：5.1 SWOT分析）
+
+ 5.2 竞争战略选择
+ → 方向：基于SWOT结论，对比成本领先/差异化/集中化三种战略优劣势
+
+ 5.3 战略实施路径
+ → 方向：[无content_hint，仅标题]
+
+【本章范围界定】
+ ✅ 5.1 负责：S/W/O/T四象限分析，各要素打分
+ ❌ 5.2 负责：战略对比与选择结论（不要在5.1写最终战略结论）
+```
 
 **Phase 2 强制检索要求**（关键词中的 `{论文主题行业}` 由 Orchestrator 自动提取）：
 - 第3章 PESTEL 分析前 → 多工具并行搜索「{论文主题行业} 市场规模/趋势/政策」
