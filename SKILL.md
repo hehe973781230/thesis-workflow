@@ -1,10 +1,10 @@
 ---
 name: thesis-workflow-v2
-description: "v2 新框架（beta）：Phase 3.5/4/5 + BGE向量匹配 + multi-search。v2 重构为 outline-anchored 设计 + 9 HIL 节点 + 真实 CLI 入口。⚠️ 测试版，需独立安装（不覆盖 v1）。"
+description: "v2.1（测试版）：新增版本管理策略（方案一+选项B）+ Phase 3.5/4/5 + multi-search。outline-anchored 设计 + 9 HIL 节点 + 真实 CLI 入口。⚠️ 测试版，需独立安装（不覆盖 v1）。"
 metadata:
   clawdbot:
     emoji: "📝"
-    version: "2.1.0-beta.4"   # 单一真实来源，发布前必须先改这里。发布规则见 scripts/release.py
+    version: "2.1.0"   # 单一真实来源，发布前必须先改这里。发布规则见 scripts/release.py
     requires: {}
     os: ["linux", "darwin", "win32"]
 ---
@@ -21,6 +21,64 @@ metadata:
 - 用户明确要求导出 `.docx` 格式且文件性质为学术论文
 
 **正确流程：** 写作语法预检 → Review Agent 终审（`scripts/loop_self_check.py` 校验通过）→ `scripts/md2docx_strict.py` 合规转换 → Word 输出
+
+---
+
+## 📁 版本管理策略（v2.1 新增）
+
+> **目的**：避免历史数据和中间版本对待写论文产生污染。每次新任务或重新开始时，物理隔离旧数据。
+
+### 目录与版本号规则
+
+- **Workspace 根路径**：`~/.openclaw/workspace/`
+- **版本目录命名**：`{论文题目}_v{n}.0/`
+  - 例：`A公司互联网分发业务竞争战略研究_v7.0/`
+  - 每次新任务或"重新开始" → 版本号 +1
+  - 旧版本目录**不删除**，物理隔离
+
+### 里程碑保留规则（日常）
+
+| 类型 | 保留内容 | 清理时机 |
+|------|---------|---------|
+| **终稿** | `v*_终稿.docx` | 答辩通过后删其他 |
+| **评审稿** | `v*_整合版.docx`（Phase3产物） | 下一版本整合后删 |
+| **中间稿** | `*_v2.md`、`*.bak` | 下一版本开始时删 |
+
+### 答辩后归档流程
+
+1. 答辩正式通过后
+2. **保留**：`论文_A公司_v最终版.docx`（最终答辩稿）
+3. **删除**：所有 `v*.*/` 中间目录
+4. **可选**：压缩包备份（`v6.0.zip` 等）
+
+### 有效文件规则（防污染）
+
+- `chX_X.X_章节名.md` = 当前正式版本
+- `chX_X.X_章节名_v2.md` = 中间版本（仅供参考，不参与写作流程）
+- `*.md.bak` = 备份文件（Orchestrator 不读取）
+- **Orchestrator 只读取无后缀的 md 文件**
+
+### 启动时检测逻辑
+
+当 Skill 检测到 `~/.openclaw/workspace/` 下已存在同名论文目录时，在 **Phase 1 入口** 增加 HIL 确认：
+
+```
+⚠️ 检测到已有版本目录：[旧版本路径]
+请选择：
+  A) 继续旧项目 [读取现有状态，继续写作]
+  B) 从新开始 [在 workspace 下创建新版本目录 v{n+1}.0，旧目录保留]
+  C) 指定版本号 [自定义版本目录名]
+```
+
+### 状态文件初始化（"从新开始"时）
+
+执行"从新开始"时，Orchestrator 自动执行：
+1. `_orchestrate_state.json` → 重置 `completed_nodes=[]`、`phase=phase1`
+2. `_outline_state.json` → 保留大纲结构，重置节点完成状态
+3. 现有 `ch*.md` 文件 → 重命名为 `*.md.bak`（不删除，可恢复）
+4. 保留 `开题报告.md`（新任务可能复用）
+
+---
 
 ## 核心架构
 
