@@ -4,7 +4,7 @@ description: "v2.1（测试版）：新增版本管理策略（方案一+选项B
 metadata:
   clawdbot:
     emoji: "📝"
-    version: "2.1.1-beta.2"   # 单一真实来源，发布前必须先改这里。发布规则见 scripts/release.py
+    version: "2.1.1-beta.3"   # 单一真实来源，发布前必须先改这里。发布规则见 scripts/release.py
     requires: {}
     os: ["linux", "darwin", "win32"]
 ---
