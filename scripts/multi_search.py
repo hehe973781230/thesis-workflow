@@ -24,8 +24,6 @@ multi_search.py - 多工具并行检索引擎
 
 import json
 import subprocess
-import urllib.parse
-import urllib.request
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -158,43 +156,32 @@ def _arxiv_search(query: str, max_results: int = 3) -> List[SearchResult]:
         return []
 
 
-def _reconstruct_abstract(inverted_index: dict) -> str:
-    """从 OpenAlex inverted_index 重建纯文本摘要"""
-    if not inverted_index:
-        return ""
-    words = []
-    for word, positions in sorted(inverted_index.items(), key=lambda x: x[1][0]):
-        words.append(word)
-    return " ".join(words)
-
-
 def _openalex_search(query: str, max_results: int = 3) -> List[SearchResult]:
-    """OpenAlex 学术文献搜索（直接 HTTP 调用，无需外部脚本）"""
+    """OpenAlex 学术文献搜索（通过 scholar-search.py）"""
     try:
-        encoded_query = urllib.parse.quote(query)
-        url = f"https://api.openalex.org/works?search={encoded_query}&per-page={max_results}&format=json"
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; MBA-Thesis-Workflow/2.1)}"}
+        script_path = "/Users/hehe9737/.openclaw/workspace/skills/academic-research/scripts/scholar-search.py"
+        cmd = [
+            "python3", script_path,
+            "search", query,
+            "--limit", str(max_results),
+            "--json",
+        ]
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=TOOPENALEX
         )
-        with urllib.request.urlopen(req, timeout=TOOPENALEX) as resp:
-            data = json.loads(resp.read())
-        works = data.get("results", [])
+        if result.returncode != 0:
+            return []
+        data = json.loads(result.stdout)
+        works = data if isinstance(data, list) else data.get("results", [])
         out = []
         for item in works[:max_results]:
-            # 重建摘要
-            inverted = item.get("abstract_inverted_index") or {}
-            abstract = _reconstruct_abstract(inverted)[:200]
-            # 作者
-            authorships = item.get("authorships", [])
-            author_names = [a.get("author", {}).get("display_name", "") for a in authorships[:2]]
-            author_str = ", ".join(n for n in author_names if n)
-            year = item.get("publication_year", "n.d.")
-            doi = item.get("doi", "") or f"https://openalex.org/{item.get('id', '')}"
-            snippet = f"{author_str} ({year})" + (f" — {abstract}" if abstract else "")
+            authors = item.get("authors", [])
+            author_str = ", ".join(authors[:2]) if authors else ""
+            abstract = item.get("abstract", "")[:200] or ""
+            snippet = f"{author_str} ({item.get('year', 'n.d.')})" + (f" — {abstract}" if abstract else "")
             r = SearchResult(
                 title=item.get("title", "") or "",
-                url=doi,
+                url=item.get("doi", "") or f"https://openalex.org/{item.get('id', '')}",
                 snippet=snippet,
                 source="openalex",
                 score=0.6,
@@ -203,6 +190,12 @@ def _openalex_search(query: str, max_results: int = 3) -> List[SearchResult]:
             if _tidy_result(r):
                 out.append(r)
         return out
+    except FileNotFoundError:
+        return []
+    except subprocess.TimeoutExpired:
+        return []
+    except json.JSONDecodeError:
+        return []
     except Exception:
         return []
 
