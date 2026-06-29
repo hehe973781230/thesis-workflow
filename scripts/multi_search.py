@@ -13,7 +13,7 @@ multi_search.py - 多工具并行检索引擎
   - web_search    ：头条搜索（通过 subprocess 调用 OpenClaw CLI）
   - tavily_search：Tavily MCP（通过 mcporter）
   - arxiv_search ：arXiv 论文搜索（通过 mcporter）
-  - openalex_search：学术文献（通过 scholar-search.py）
+  - openalex_search：学术文献（直接 HTTP 调用 OpenAlex API）
 
 用法：
   from multi_search import multi_search
@@ -190,7 +190,7 @@ def _openalex_search(query: str, max_results: int = 3) -> List[SearchResult]:
             author_names = [a.get("author", {}).get("display_name", "") for a in authorships[:2]]
             author_str = ", ".join(n for n in author_names if n)
             year = item.get("publication_year", "n.d.")
-            doi = item.get("doi", "") or f"https://openalex.org/{item.get('id', '')}"
+            doi = item.get("doi", "") or item.get("id", "")
             snippet = f"{author_str} ({year})" + (f" — {abstract}" if abstract else "")
             r = SearchResult(
                 title=item.get("title", "") or "",
