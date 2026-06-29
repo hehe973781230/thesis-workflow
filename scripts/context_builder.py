@@ -290,7 +290,6 @@ def _infer_scope_boundary(current_node: Dict, sibling: Dict, parent_id: str) -> 
     """
     current_title = current_node.get("title", "")
     sibling_title = sibling.get("title", "")
-    current_l3 = current_node.get("level", 0) == 3
 
     # 通用互斥关键词对（语义互斥，同级章节不会重复）
     # 如果当前节点和同级节点都包含同一高层级关键词，说明有边界重叠风险
@@ -321,10 +320,6 @@ def _infer_scope_boundary(current_node: Dict, sibling: Dict, parent_id: str) -> 
             return "❌"
         if current_has_neg and sibling_has_pos:
             return "❌"
-
-    # 如果是 L3 节点，同级 L3 之间各自负责自己的分析维度
-    if current_l3:
-        return ""
 
     # L2 节点：检查是否有明显的边界重叠
     # 例如：5.1 SWOT分析 和 5.2 竞争战略选择 → 5.1 负责分析，5.2 负责选择
@@ -643,7 +638,7 @@ def build_prompt_package_text(package: Dict) -> str:
         parts.append(f"{package['content_hint']}\n")
 
     if package.get('sibling_context'):
-        parts.append(f"\n{package['sibling_context']}\n")
+        parts.append(f"\n{package['sibling_context']}")
 
     if package.get('search_context'):
         parts.append(f"\n## 行业/学术数据参考（多工具检索）\n")
