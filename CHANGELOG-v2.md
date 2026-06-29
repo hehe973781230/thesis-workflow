@@ -1,7 +1,7 @@
 # CHANGELOG - v2.x 新框架
 
 > v2.x 是 **v2 框架**（outline-anchored 重构 + 9 HIL 节点 + 真实 CLI 入口）的活跃开发分支。
-> 当前 latest: **v2.0.14**
+> 当前 latest: **v2.1.1-beta.1**
 > ClawHub Slug: `thesis-workflow-v2`（独立仓库）
 > 详见 [CHANGELOG.md](./CHANGELOG.md) 的版本线索引。
 
@@ -19,6 +19,61 @@ v1.7.4 / v1.7.5 / v1.7.6 / v1.7.7 **实际为 v2 框架的早期 alpha 开发**�
 - v2.0.14 = v2 当前 latest
 
 **Commit hash 已保留，可在 git history 中追溯。**
+
+## [v2.1.1-beta.1] - 2026-06-30
+
+### 版本管理策略（v2.1 新增）
+
+**目的**：避免历史数据和中间版本对待写论文产生污染。每次新任务或重新开始时，物理隔离旧数据。
+
+**核心规则**：
+- Workspace 根路径：`~/.openclaw/workspace/`
+- 版本目录命名：`{论文题目}_v{n}.0/`（每次新任务 +1）
+- Orchestrator 只读取无后缀的 md 文件；`*.md.bak` / `*_v2.md` 不参与写作流程
+- 答辩通过后：保留最终答辩稿，删除所有中间目录
+
+**新文件**：
+- `scripts/release.py`（262行）：统一发布脚本，SSOT 版本管理，beta/release 双模式
+- `requirements-optional.txt`：可选向量加速依赖（BGE-small-zh）
+
+**改动文件**：
+- `SKILL.md`：新增版本管理策略章节，frontmatter SSOT 版本字段
+- `requirements.txt`：移除 sentence-transformers（重型依赖移至 optional）
+- `install.sh`：移除 Hermes 检测（仅支持 OpenClaw）
+- `config.template`：移除 USER_EMAIL/SENDER_EMAIL/HERMES_BIN 遗留字段
+
+### P0 修复：AI 评审链全失效根因
+
+**问题**：reviewer.py 缺少 `import json`，导致 AI 评审全链路失效。
+
+**修复**：
+- `scripts/reviewer.py`：新增 `import json`
+- `scripts/orchestrator_v2.py`：docstring invalid escape `\s` → `\\s`
+
+### P0 修复：RuntimeLLM session 精确限定
+
+**问题**：background 场景下 `_get_session_info` 使用 `--all-agents` 导致静默失败。
+
+**修复**：
+- `RuntimeLLM.__init__`：保存传入的 `agent_id`
+- `_get_session_info`：优先用 `--agent <agent_id>` 精确限定
+- `get_runtime_llm()`：新增 `agent_id` 参数，全局单例透传
+
+### Phase 测试断言同步
+
+- `test_orchestrator.py`：phase 断言同步至 `phase1_1` / `phase1_2`
+
+### 版本记录
+
+| Tag | Commit | 说明 |
+|-----|--------|------|
+| v2.1.0-beta.1 | 1182613 | release.py + SSOT 版本字段 |
+| v2.1.0-beta.2 | 90ca4f0 | 版本 bump |
+| v2.1.0-beta.3 | 3382dae | 版本 bump，latest tag 指向 beta |
+| v2.1.0-beta.4 | 1425766 | 版本 bump |
+| v2.1.0 | 7c32ca0~HEAD | P0 修复 + 版本管理策略 + 清理遗留依赖 |
+
+---
 
 ## [v2.0.13] - 2026-06-28
 
