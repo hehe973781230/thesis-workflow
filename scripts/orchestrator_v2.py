@@ -51,6 +51,13 @@ from gatekeeper_integration import (
     write_user_decision,
     clear_pending,
 )
+from phase_manager import (
+    PhaseManager,
+    CONTENT_TYPE_INTEGRATED,
+    CONTENT_TYPE_REVIEW,
+    CONTENT_TYPE_SUMMARY,
+)
+from state_manager_v2 import _get_paper_dir
 
 
 # ============================================================
@@ -167,6 +174,57 @@ from state_manager_v2 import (
     reset_orchestrate_state,
     update_progress,
 )
+
+
+# ============================================================
+# PhaseManager 集成辅助函数
+# ============================================================
+
+def _get_pm(paper_name: str):
+    """获取 PhaseManager 实例（惰性创建）"""
+    if not hasattr(_get_pm, "_cache"):
+        _get_pm._cache = {}
+    if paper_name not in _get_pm._cache:
+        workspace = _get_paper_dir(paper_name)
+        _get_pm._cache[paper_name] = PhaseManager(paper_name, workspace)
+    return _get_pm._cache[paper_name]
+
+
+def _build_hil_result(paper_name: str, phase: float, next_phase: float = None,
+                       review_data: Dict = None,
+                       phase_result: Dict = None,
+                       sub_type: str = None) -> Dict[str, Any]:
+    """
+    Phase 完成后通用处理：保存产出到文件 + 生成 HIL 消息。
+
+    sub_type: 可选子类型，用于同一 phase 的不同操作区分文件写入。
+    目前用于 Phase 1.3: "submit" 写 review 文件，"confirm" 写 integrated 文件，
+    避免两次调用覆盖同一文件。
+    """
+    pm = _get_pm(paper_name)
+
+    if phase_result and "content" in phase_result:
+        pm.save_integrated(phase, phase_result["content"])
+    if review_data:
+        # Phase 1.3 confirm 时用 integrated 文件，避免覆盖 submit 的 review 文件
+        if phase == 1.3 and sub_type == "confirm":
+            # confirm 产出是 chapter_tree，存 integrated
+            pm.save_integrated(phase, phase_result.get("content", "") if phase_result else "")
+        else:
+            pm.save_review(phase, review_data)
+        # 注入到 phase_result 中供 build_key_metrics 使用
+        if phase_result is None:
+            phase_result = {}
+        phase_result["review_report"] = review_data
+
+    hil_msg = pm.generate_hil_message(phase=phase, next_phase=next_phase)
+
+    return {
+        "ok": True,
+        "phase": f"phase{phase}",
+        "hil_message": hil_msg,
+        "summary": pm.get_phase_summary_dict(phase),
+    }
 
 
 # ============================================================
@@ -335,6 +393,20 @@ def orchestrate_phase1_1(
     state["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
     save_orchestrate_state(paper_name, state)
 
+    # PhaseManager:保存产出 + 生成 HIL 消息
+    hil_info = _build_hil_result(
+        paper_name=paper_name,
+        phase=1,
+        next_phase=1.3,
+        review_data={
+            "outline": outline,
+            "issues": result.get("issues", []),
+            "summary": result.get("summary", {}),
+            "input_type": input_type,
+        },
+        phase_result={"content": input_data if isinstance(input_data, str) else str(input_data)},
+    )
+
     return {
         "ok": True,
         "action": "review_outline",
@@ -343,6 +415,8 @@ def orchestrate_phase1_1(
         "outline": outline,
         "issues": result.get("issues", []),
         "summary": result.get("summary", {}),
+        "hil_message": hil_info["hil_message"],
+        "summary_phase": hil_info["summary"],
         "message": f"目录已解析(input_type={input_type}),请确认后进入 Phase 1.2"
     }
 
@@ -367,6 +441,7 @@ def confirm_phase1(paper_name: str) -> Dict[str, Any]:
         "ok": True,
         "phase": "phase1_2",
         "phase1_3_status": "pending",
+        "hil_message": None,
         "message": "目录已确认(Phase 1.2 完成)，请核对下方归因分析(Phase 1.3)"
     }
 
@@ -541,6 +616,17 @@ def orchestrate_phase1_3(
     state["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
     save_orchestrate_state(paper_name, state)
 
+    hil_info = _build_hil_result(
+        paper_name=paper_name,
+        phase=1.3,
+        next_phase=2,
+        review_data={
+            "summary": state["phase1_3_result"]["summary"],
+            "node_count": len(node_details),
+        },
+        phase_result={"content": docx_path},
+    )
+
     return {
         "ok": True,
         "phase1_3_status": "submitted",
@@ -548,6 +634,8 @@ def orchestrate_phase1_3(
         "summary": state["phase1_3_result"]["summary"],
         "node_details": node_details,
         "orphan_segments": proposal_result.get("orphan_segments", []),
+        "hil_message": hil_info["hil_message"],
+        "summary_phase": hil_info["summary"],
         "message": f"开题报告归因完成:{state['phase1_3_result']['summary']}"
     }
 
@@ -652,14 +740,28 @@ def confirm_phase1_3(paper_name: str) -> Dict[str, Any]:
     state["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
     save_orchestrate_state(paper_name, state)
 
+    hil_info = _build_hil_result(
+        paper_name=paper_name,
+        phase=1.3,
+        next_phase=2,
+        review_data={
+            "chapter_count": len(chapter_tree),
+            "node_count": len(node_details),
+            "summary": state.get("phase1_3_result", {}).get("summary", {}),
+        },
+        phase_result={"content": str(chapter_tree)},
+        sub_type="confirm",
+    )
+
     return {
         "ok": True,
         "phase": "phase2",
         "phase1_3_status": "confirmed",
         "current_node_id": first_node["id"] if first_node else None,
         "node_details": node_details,
-        "chapter_tree": chapter_tree,  # 含归因信息的完整章节树
-        "summary": state.get("phase1_3_result", {}).get("summary", {}),
+        "chapter_tree": chapter_tree,
+        "hil_message": hil_info["hil_message"],
+        "summary_phase": hil_info["summary"],
         "message": f"Phase 1.3 已确认,进入 Phase 2。"
                f"请核对下方章节树中每章/节/小节的 content_hint 是否与开题报告一致。"
     }
@@ -951,12 +1053,29 @@ def write_single_node(paper_name: str, node_id: str,
     else:
         action = "pending_review"
 
+    # PhaseManager:记录节点写作状态（追加写入，不覆盖）
+    try:
+        pm = _get_pm(paper_name)
+        pm.append_node_review(
+            phase=2,
+            node_id=node_id,
+            node_data={
+                "status": "completed" if review_result.get("pass", False) else "pending_review",
+                "quality": review_result.get("quality", "unknown"),
+                "word_count": word_count,
+                "action": action,
+            },
+        )
+    except Exception:
+        pass  # PhaseManager 失败不影响主流程
+
     return {
         "ok": True,
         "action": action,
         "node_id": node_id,
         "review_result": review_result,
         "chapter_summary": chapter_summary_result,
+        "word_count": word_count,
         "error": ""
     }
 
@@ -1158,6 +1277,21 @@ def orchestrate_phase3(paper_name: str) -> Dict[str, Any]:
     state["phase3_status"] = "awaiting_review"
     save_orchestrate_state(paper_name, state)
 
+    hil_info = _build_hil_result(
+        paper_name=paper_name,
+        phase=3,
+        next_phase=3.5,
+        review_data={
+            "guardrails_passed": True,
+            "guardrails_detail": "整合完成，待审核",
+            "summary": {
+                "completed_count": len(state["completed_nodes"]),
+                "failed_count": len(state.get("failed_nodes", [])),
+            }
+        },
+        phase_result={"content": full_content},
+    )
+
     return {
         "ok": True,
         "phase": "phase3",
@@ -1166,6 +1300,8 @@ def orchestrate_phase3(paper_name: str) -> Dict[str, Any]:
         "word_count": len(full_content),
         "completed_count": len(state["completed_nodes"]),
         "failed_count": len(state.get("failed_nodes", [])),
+        "hil_message": hil_info["hil_message"],
+        "summary": hil_info["summary"],
         "message": "论文已整合,请预览并提出修改意见"
     }
 
@@ -1271,12 +1407,29 @@ def confirm_phase3_and_export(paper_name: str) -> Dict[str, Any]:
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(full_content)
 
+    hil_info = _build_hil_result(
+        paper_name=paper_name,
+        phase=3,
+        next_phase=3.5,
+        review_data={
+            "review_report": {
+                "summary": {
+                    "guardrails_passed": True,
+                    "guardrails_detail": f"已导出至 {output_path}",
+                }
+            }
+        },
+        phase_result={"content": full_content},
+    )
+
     return {
         "ok": True,
         "phase": "phase3",
         "sub_status": "exported",
         "output_path": output_path,
         "word_count": len(full_content),
+        "hil_message": hil_info["hil_message"],
+        "summary": hil_info["summary"],
         "message": f"论文已导出至 {output_path},请使用 md2docx_strict.py 转换为 Word"
     }
 
@@ -1639,21 +1792,41 @@ def orchestrate_phase3_5(paper_name: str) -> Dict[str, Any]:
 
     save_orchestrate_state(paper_name, state)
 
+    # PhaseManager:保存产出 + 生成 HIL 消息
+    hil_info = _build_hil_result(
+        paper_name=paper_name,
+        phase=3.5,
+        next_phase=4,
+        review_data={
+            "review_round": review_round,
+            "consecutive_clean": state.get("phase3_5_consecutive_clean", 0),
+            "guardrails_passed": state["phase3_5_status"] == "passed",
+            "p0_list": review_result.get("p0", []),
+            "p1_list": review_result.get("p1", []),
+            "p2_list": review_result.get("p2", []),
+            "summary": {
+                "p0_issues": p0_count,
+                "p1_issues": p1_count,
+                "p2_issues": p2_count,
+                "text": review_result.get("summary", ""),
+            },
+        },
+        phase_result={"content": full_content},
+    )
+
     return {
         "ok": True,
         "phase": "phase3.5",
         "review_round": review_round,
-        "p0": review_result.get("p0", []),
-        "p1": review_result.get("p1", []),
-        "p2": review_result.get("p2", []),
         "p0_count": p0_count,
         "p1_count": p1_count,
         "p2_count": p2_count,
         "new_p0_count": len(new_p0),
         "consecutive_clean": state.get("phase3_5_consecutive_clean", 0),
-        "summary": review_result.get("summary", ""),
         "needs_hil": needs_hil,
         "status": state["phase3_5_status"],
+        "hil_message": hil_info["hil_message"],
+        "summary": hil_info["summary"],
         "message": f"深度评审第 {review_round} 轮:P0={p0_count}, P1={p1_count}, P2={p2_count}" + \
                    (",已达到通过标准" if state["phase3_5_status"] == "passed" else "") + \
                    (",超过3轮未收敛,需要您决策" if needs_hil else ""),
@@ -1877,12 +2050,26 @@ def orchestrate_phase4(paper_name: str) -> Dict[str, Any]:
     state["phase4_status"] = "completed"
     save_orchestrate_state(paper_name, state)
 
+    # PhaseManager:保存产出 + 生成 HIL 消息
+    hil_info = _build_hil_result(
+        paper_name=paper_name,
+        phase=4,
+        next_phase=5,
+        review_data={
+            "fixed_p0": fix_result["fixed_p0"],
+            "pending_p1": len(p1),
+        },
+        phase_result={"content": full_content},
+    )
+
     return {
         "ok": True,
         "phase": "phase4",
         "fixed_p0": fix_result["fixed_p0"],
         "pending_p1": len(p1),
         "word_count": len(full_content),
+        "hil_message": hil_info["hil_message"],
+        "summary": hil_info["summary"],
         "message": f"Phase 4 整合完成:已修复 {fix_result['fixed_p0']} 个 P0 问题,还有 {len(p1)} 个 P1 建议"
     }
 
@@ -1995,12 +2182,27 @@ def orchestrate_phase5(paper_name: str) -> Dict[str, Any]:
         msg += "(⚠️ Guardrails 校验未通过,请检查后重新导出)"
     msg += "\n如需 Word 文档,请运行:python3 scripts/md2docx_strict.py " + output_path
 
+    # PhaseManager:保存产出 + 生成 HIL 消息
+    hil_info = _build_hil_result(
+        paper_name=paper_name,
+        phase=5,
+        next_phase=None,
+        review_data={
+            "guardrails_pass": guardrails_result.get("pass", False),
+            "guardrails_detail": guardrails_result,
+            "output_path": output_path,
+        },
+        phase_result={"content": full_content, "docx_generated": True},
+    )
+
     return {
         "ok": True,
         "phase": "phase5",
         "guardrails_pass": guardrails_result.get("pass", False),
         "output_path": output_path,
         "word_count": len(full_content),
+        "hil_message": hil_info["hil_message"],
+        "summary": hil_info["summary"],
         "message": msg,
     }
 

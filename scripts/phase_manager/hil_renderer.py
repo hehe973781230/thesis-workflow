@@ -130,7 +130,22 @@ class PhaseHILRenderer:
         """格式化关键指标为可读行"""
         lines = []
 
-        if phase == 2:
+        if phase in (1, 1.3):
+            if phase == 1:
+                chapter_count = key_metrics.get("chapter_count", 0)
+                issues_count = key_metrics.get("issues_count", 0)
+                input_type = key_metrics.get("input_type", "unknown")
+                lines.append(f"📋 大纲解析：章节 {chapter_count} 个 | 问题 {issues_count} 个")
+                lines.append(f"📥 输入类型：{input_type}")
+            else:
+                chapter_count = key_metrics.get("chapter_count", 0)
+                node_count = key_metrics.get("node_count", 0)
+                summary = key_metrics.get("summary", "")
+                lines.append(f"🔗 归因分析：{chapter_count} 章节 | {node_count} 个节点")
+                if summary:
+                    lines.append(f"📝 摘要：{summary}")
+
+        elif phase == 2:
             completed = key_metrics.get("nodes_completed", 0)
             total = key_metrics.get("nodes_total", 0)
             failed = key_metrics.get("nodes_failed", 0)

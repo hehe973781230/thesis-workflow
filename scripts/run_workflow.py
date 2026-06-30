@@ -557,6 +557,9 @@ def run_phase1(paper_name: str) -> bool:
         node_count = len(r.get("outline", {}).get("outline_tree", {}).get("nodes", []))
         print(f"✅ Phase 1.1 完成: 解析 {node_count} 个节点")
 
+    if r.get("hil_message"):
+        print(f"\n{r['hil_message']}")
+
     # HIL #1: 大纲确认
     outline = outline_load(paper_name)
     nodes = outline["outline"]["outline_tree"]["nodes"]
@@ -617,6 +620,8 @@ def run_phase1(paper_name: str) -> bool:
         if not r.get("ok"):
             print(f"❌ Phase 1.3 submit 失败: {r.get('error')}")
             return False
+        if r.get("hil_message"):
+            print(f"\n{r['hil_message']}")
         print(f"✅ Phase 1.3 submit 完成")
 
     # 显示归因结果（章节 → 研究问题映射表）
@@ -671,6 +676,8 @@ def run_phase1(paper_name: str) -> bool:
         if not r.get("ok"):
             print(f"❌ Phase 1.3 confirm 失败: {r.get('error')}")
             return False
+        if r.get("hil_message"):
+            print(f"\n{r['hil_message']}")
         print(f"✅ Phase 1.3 完成: 归因已确认，进入 Phase 2")
 
     elif choice == "2":
@@ -860,6 +867,12 @@ def run_phase2(paper_name: str) -> bool:
     failed_count = progress.get('failed', 0)
     total = progress.get('total', 0)
 
+    # 生成 Phase 2 HIL 消息（从 PhaseManager 文件读取状态）
+    from orchestrator_v2 import _get_pm
+    pm = _get_pm(paper_name)
+    hil_msg = pm.generate_hil_message(phase=2, next_phase=3)
+    print(f"\n{hil_msg}")
+
     print(f"\n📊 Phase 2 完成: {completed_count}/{total} 节点 completed，{failed_count} failed")
     hil_pause("5", "Phase 2 内容是否接受？",
              {"1": "确认（进入 Phase 3）",
@@ -890,6 +903,9 @@ def run_phase3(paper_name: str) -> bool:
         print(f"❌ Phase 3 整合失败: {r.get('error')}")
         return False
 
+    if r.get("hil_message"):
+        print(f"\n{r['hil_message']}")
+
     # HIL #6: 整合版预览
     content = r.get("content", "")
     word_count = r.get("word_count", 0)
@@ -910,6 +926,8 @@ def run_phase3(paper_name: str) -> bool:
         return False
 
     output_path = r.get("output_path")
+    if r.get("hil_message"):
+        print(f"\n{r['hil_message']}")
     print(f"✅ 论文已导出: {output_path}")
     print(f"   字数: {r.get('word_count')}")
 
@@ -1015,6 +1033,8 @@ def main():
             print(f"✅ Phase 3.5 通过（连续 2 轮无新 P0）")
         else:
             print(f"⚠️ Phase 3.5 超 {max_rounds} 轮仍有 P0，需人工介入")
+        if r.get("hil_message"):
+            print(f"\n{r['hil_message']}")
         print(f"✅ Phase 3.5 完成")
 
     if args.phase in ("phase4", "auto"):
@@ -1023,6 +1043,8 @@ def main():
         if not r.get("ok"):
             print(f"❌ Phase 4 失败: {r.get('error')}")
             return 1
+        if r.get("hil_message"):
+            print(f"\n{r['hil_message']}")
         print(f"✅ Phase 4 完成")
 
     if args.phase in ("phase5", "auto"):
@@ -1031,6 +1053,8 @@ def main():
         if not r.get("ok"):
             print(f"❌ Phase 5 失败: {r.get('error')}")
             return 1
+        if r.get("hil_message"):
+            print(f"\n{r['hil_message']}")
         print(f"✅ Phase 5 完成")
 
     print(f"\n🎉 全部完成")

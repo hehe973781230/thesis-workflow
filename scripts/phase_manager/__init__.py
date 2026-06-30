@@ -202,6 +202,60 @@ class PhaseManager:
             key_metrics=key_metrics,
         )
 
+    def append_node_review(self, phase: float, node_id: str,
+                           node_data: Dict) -> Dict[str, Any]:
+        """
+        追加写入节点审核记录（用于 Phase 2 多节点累计写入）。
+
+        读取现有 review 文件，追加节点记录，再写回。
+        初始文件不存在时创建。
+
+        Args:
+            phase: Phase 编号
+            node_id: 节点 ID
+            node_data: 节点记录 {status, quality, word_count, ...}
+
+        Returns:
+            同 save_phase_output
+        """
+        import json
+
+        # 读取现有 review 文件
+        existing = {}
+        review_content = self.fm.load_content(phase, CONTENT_TYPE_REVIEW)
+        if review_content:
+            try:
+                existing = json.loads(review_content)
+            except Exception:
+                existing = {}
+
+        # 追加节点记录
+        if "nodes" not in existing:
+            existing["nodes"] = {}
+        existing["nodes"][node_id] = {
+            "node_id": node_id,
+            **node_data,
+            "timestamp": now_iso(),
+        }
+
+        # 重新计算统计
+        nodes = existing.get("nodes", {})
+        existing["_stats"] = {
+            "nodes_total": len(nodes),
+            "nodes_completed": sum(1 for n in nodes.values() if n.get("status") == "completed"),
+            "nodes_failed": sum(1 for n in nodes.values() if n.get("status") == "failed"),
+        }
+
+        content = json.dumps(existing, ensure_ascii=False, indent=2)
+
+        # 复用 save_phase_output 逻辑（覆盖写入）
+        return self.save_phase_output(
+            phase=phase,
+            content_type=CONTENT_TYPE_REVIEW,
+            content=content,
+            key_metrics=existing["_stats"],
+        )
+
     # ------------------------------------------------------------------------
     # 核心流程：读取产出
     # ------------------------------------------------------------------------
@@ -392,6 +446,24 @@ class PhaseManager:
             "file_path": file_path,
             "summary": summary,
             "user_modified": user_modified,
+        }
+
+    def get_phase_summary_dict(self, phase: float) -> Optional[Dict]:
+        """
+        返回 Phase N 的 summary 信息（JSON 可序列化 dict）。
+        用于 orchestrator 返回给上层调用。
+        """
+        summary = self.sg.get_summary(phase)
+        if summary is None:
+            return None
+        return {
+            "phase": summary.phase,
+            "status": summary.status,
+            "word_count": summary.word_count,
+            "chapter_count": summary.chapter_count,
+            "content_hash": summary.content_hash,
+            "timestamp": summary.timestamp,
+            "key_metrics": summary.key_metrics,
         }
 
     def get_all_phase_status(self) -> List[Dict]:

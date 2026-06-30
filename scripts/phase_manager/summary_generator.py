@@ -122,10 +122,53 @@ class PhaseSummaryGenerator:
         """
         metrics = {}
 
-        if phase == 2:
-            # 从 phase_result 中提取节点写作统计
-            if "nodes" in phase_result:
-                nodes = phase_result["nodes"]
+        if phase in (1, 1.3):
+            # Phase 1: outline 结构统计；Phase 1.3: 归因结果统计
+            review_data = phase_result.get("review_data", {})
+            if not review_data:
+                review_content = self.fm.load_content(phase, CONTENT_TYPE_REVIEW)
+                if review_content:
+                    import json
+                    try:
+                        review_data = json.loads(review_content)
+                    except Exception:
+                        pass
+            if phase == 1:
+                outline = review_data.get("outline", {})
+                chapter_count = len(outline) if isinstance(outline, dict) else 0
+                metrics = {
+                    "chapter_count": chapter_count,
+                    "issues_count": len(review_data.get("issues", [])),
+                    "input_type": review_data.get("input_type", "unknown"),
+                }
+            else:  # 1.3
+                metrics = {
+                    "chapter_count": review_data.get("chapter_count", 0),
+                    "node_count": review_data.get("node_count", 0),
+                    "summary": str(review_data.get("summary", ""))[:50],
+                }
+
+        elif phase == 2:
+            # 从 review_report（由 append_node_review 写入）或 phase_result 中提取统计
+            review_data = phase_result.get("review_report") if phase_result else None
+
+            if review_data is None:
+                review_content = self.fm.load_content(phase, CONTENT_TYPE_REVIEW)
+                if review_content:
+                    import json
+                    try:
+                        review_data = json.loads(review_content)
+                    except Exception:
+                        pass
+
+            # 优先从 review_data._stats 读（append_node_review 写入的累计统计）
+            if review_data and "_stats" in review_data:
+                stats = review_data["_stats"]
+                nodes_total = stats.get("nodes_total", 0)
+                nodes_completed = stats.get("nodes_completed", 0)
+                nodes_failed = stats.get("nodes_failed", 0)
+            elif review_data and "nodes" in review_data:
+                nodes = review_data["nodes"]
                 nodes_total = len(nodes)
                 nodes_completed = sum(1 for n in nodes.values() if n.get("status") == "completed")
                 nodes_failed = sum(1 for n in nodes.values() if n.get("status") == "failed")
@@ -150,13 +193,8 @@ class PhaseSummaryGenerator:
             }
 
         elif phase in (3, 3.5):
-            # 从 review 文件或 phase_result 中提取审核结果
-            review_data = None
-            if "review_report" in phase_result:
-                review_data = phase_result["review_report"]
-            elif "summary" in phase_result:
-                review_data = phase_result
-
+            # 从 review_report 中提取审核结果（review_data 由 _build_hil_result 注入）
+            review_data = phase_result.get("review_report") if phase_result else None
             if review_data is None:
                 review_content = self.fm.load_content(phase, CONTENT_TYPE_REVIEW)
                 if review_content:
@@ -168,13 +206,26 @@ class PhaseSummaryGenerator:
 
             if review_data:
                 summary_data = review_data.get("summary", {})
-                metrics = {
-                    "p0_issues": summary_data.get("p0_issues", 0),
-                    "p1_issues": summary_data.get("p1_issues", 0),
-                    "p2_issues": summary_data.get("p2_issues", 0),
-                    "guardrails_passed": summary_data.get("guardrails_passed", False),
-                    "guardrails_detail": summary_data.get("guardrails_detail", ""),
-                }
+                # summary_data 现在是 dict：{p0_issues, p1_issues, p2_issues, text}
+                # guardrails_passed 在 review_data 顶层（Phase 3.5）
+                guardrails_passed = review_data.get("guardrails_passed", False)
+                if isinstance(summary_data, dict):
+                    metrics = {
+                        "p0_issues": summary_data.get("p0_issues", 0),
+                        "p1_issues": summary_data.get("p1_issues", 0),
+                        "p2_issues": summary_data.get("p2_issues", 0),
+                        "guardrails_passed": guardrails_passed,
+                        "guardrails_detail": summary_data.get("guardrails_detail", ""),
+                    }
+                else:
+                    # 兼容旧格式：summary 是字符串
+                    metrics = {
+                        "p0_issues": review_data.get("p0_issues", 0),
+                        "p1_issues": review_data.get("p1_issues", 0),
+                        "p2_issues": review_data.get("p2_issues", 0),
+                        "guardrails_passed": guardrails_passed,
+                        "guardrails_detail": str(summary_data) if summary_data else "",
+                    }
             else:
                 metrics = {
                     "p0_issues": -1,
@@ -186,7 +237,9 @@ class PhaseSummaryGenerator:
 
         elif phase == 4:
             # Phase 4 整合
-            changes_applied = phase_result.get("changes_applied", 0) if phase_result else 0
+            review_data = phase_result.get("review_report") if phase_result else None
+            changes_applied = review_data.get("fixed_p0", 0) if review_data else 0
+            pending_p1 = review_data.get("pending_p1", 0) if review_data else 0
             if content:
                 word_count = calculate_word_count(content)
             else:
@@ -195,20 +248,25 @@ class PhaseSummaryGenerator:
             metrics = {
                 "integrated_word_count": word_count,
                 "changes_applied": changes_applied,
-                "guardrails_passed": phase_result.get("guardrails_passed", False) if phase_result else False,
+                "pending_p1": pending_p1,
+                "guardrails_passed": review_data.get("guardrails_passed", False) if review_data else False,
             }
 
         elif phase == 5:
             # Phase 5 终审
+            review_data = phase_result.get("review_report") if phase_result else None
             if content:
                 word_count = calculate_word_count(content)
             else:
                 word_count = 0
 
+            guardrails_pass = review_data.get("guardrails_pass", False) if review_data else False
+            docx_generated = phase_result.get("docx_generated", False) if phase_result else False
+
             metrics = {
                 "word_count": word_count,
-                "guardrails_passed": phase_result.get("guardrails_passed", False) if phase_result else False,
-                "docx_generated": phase_result.get("docx_generated", False) if phase_result else False,
+                "guardrails_passed": guardrails_pass,
+                "docx_generated": docx_generated,
             }
 
         return metrics
