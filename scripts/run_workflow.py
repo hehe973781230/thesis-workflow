@@ -757,7 +757,7 @@ def get_paper_status(paper_name: str) -> Optional[Dict[str, Any]]:
 # Phase 1: 规划与归因
 # ============================================================
 
-def run_phase1(paper_name: str, llm_func: Optional[Callable] = None) -> bool:
+def run_phase1(paper_name: str) -> bool:
     """Phase 1: 解析 + 大纲确认 + Phase 1.3"""
     state = load_orchestrate_state(paper_name)
 
@@ -773,8 +773,7 @@ def run_phase1(paper_name: str, llm_func: Optional[Callable] = None) -> bool:
 
         if docx_path and Path(docx_path).exists():
             r = orchestrate(paper_name, action="phase1_1_init",
-                          input_type="docx", input_data=docx_path,
-                          llm_func=llm_func)
+                          input_type="docx", input_data=docx_path)
         elif docx_path:
             print(f"❌ 文件不存在: {docx_path}")
             return False
@@ -792,8 +791,7 @@ def run_phase1(paper_name: str, llm_func: Optional[Callable] = None) -> bool:
                 print("❌ 文本为空，无法解析")
                 return False
             r = orchestrate(paper_name, action="phase1_1_init",
-                          input_type="text", input_data=outline_text,
-                          llm_func=llm_func)
+                          input_type="text", input_data=outline_text)
 
         if not r.get("ok"):
             print(f"❌ Phase 1.1 失败: {r.get('error')}")
@@ -858,7 +856,7 @@ def run_phase1(paper_name: str, llm_func: Optional[Callable] = None) -> bool:
 
         # 提交归因分析（silent）
         r = orchestrate(paper_name, action="phase1_3_submit",
-                       docx_path=existing_path, llm_func=llm_func)
+                       docx_path=existing_path)
         if not r.get("ok"):
             print(f"❌ Phase 1.3 submit 失败: {r.get('error')}")
             return False
@@ -936,7 +934,7 @@ def run_phase1(paper_name: str, llm_func: Optional[Callable] = None) -> bool:
 # Phase 2: 写作循环
 # ============================================================
 
-def run_phase2(paper_name: str, llm_func: Callable) -> bool:
+def run_phase2(paper_name: str) -> bool:
     """Phase 2: 写作循环（v2.0.4 推荐调用模式）"""
     state = load_orchestrate_state(paper_name)
     if not state:
@@ -945,10 +943,6 @@ def run_phase2(paper_name: str, llm_func: Callable) -> bool:
     if state.get("phase1_3_status") != "confirmed":
         print(f"❌ Phase 1.3 未确认（当前: {state.get('phase1_3_status')}）")
         return False
-    if not llm_func:
-        print("❌ Phase 2 需要 llm_func 参数")
-        return False
-
     total = state.get('progress', {}).get('total', 0)
     print(f"\n📝 Phase 2: 逐节点写作（共 {total} 节点）")
 
@@ -977,7 +971,7 @@ def run_phase2(paper_name: str, llm_func: Callable) -> bool:
             break
 
         # v2.0.4 推荐路径：write_single_node（内部含 check_info_scarcity + LLM + review）
-        result = write_single_node(paper_name, next_node_id, llm_func, bypass_scarcity=False)
+        result = write_single_node(paper_name, next_node_id, bypass_scarcity=False)
 
         if not result.get("ok"):
             print(f"❌ 节点 {next_node_id} 失败: {result.get('error')}")
@@ -1011,14 +1005,12 @@ def run_phase2(paper_name: str, llm_func: Callable) -> bool:
                     return False
                 apply_user_decision(paper_name, next_node_id, "1", user_hint=new_hint)
                 # 重新调 write_single_node（bypass_scarcity=True 因为 hint 已更新）
-                result = write_single_node(paper_name, next_node_id, llm_func, bypass_scarcity=True)
-                action = result.get("action")
+                result = write_single_node(paper_name, next_node_id, bypass_scarcity=True)
 
             elif choice == "2":
                 apply_user_decision(paper_name, next_node_id, "2")
                 # 重新调 write_single_node
-                result = write_single_node(paper_name, next_node_id, llm_func, bypass_scarcity=True)
-                action = result.get("action")
+                result = write_single_node(paper_name, next_node_id, bypass_scarcity=True)
 
             elif choice == "3":
                 apply_user_decision(paper_name, next_node_id, "3")
@@ -1066,7 +1058,7 @@ def run_phase2(paper_name: str, llm_func: Callable) -> bool:
 
             elif choice == "2":
                 # 重写：调 write_single_node 一次（bypass_scarcity=True 跳过信息检查）
-                rewrite_result = write_single_node(paper_name, next_node_id, llm_func, bypass_scarcity=True)
+                rewrite_result = write_single_node(paper_name, next_node_id, bypass_scarcity=True)
                 rewrite_action = rewrite_result.get("action")
                 if rewrite_action == "completed":
                     # 重写后评审 high → 直接 completed
@@ -1221,63 +1213,16 @@ def main():
         print("=" * 60)
         return 2  # 返回特殊码，告知调用方需要 AI 介入
 
-    llm_func = None
-
-    if args.phase in ("phase1", "auto"):
-        # Phase 1.3 需要 llm_func
-        try:
-            rllm = get_runtime_llm(agent_id=args.agent_id)
-            if args.llm:
-                # 用户指定了模型
-                model = args.llm
-                llm_func = rllm.make_llm_func(model=model)
-                print(f"✅ 使用指定模型: {model}")
-            else:
-                # 自动从当前 session 获取
-                model = rllm.current_model()
-                llm_func = rllm.make_llm_func()
-                print(f"✅ 自动使用当前 session 模型: {model}")
-        except Exception as e:
-            print()
-            print("=" * 60)
-            print("❌ 无法获取运行中 session 配置（Phase 1.3 需要 llm_func）")
-            print("=" * 60)
-            print(f"   错误: {e}")
-            print()
-            print("解决方案：")
-            print("   1. 确保从 OpenClaw session 内调用本脚本（自动获取配置）")
-            print("   2. 或通过 --llm 参数指定模型：")
-            print("      python3 scripts/run_workflow.py <paper> --phase phase1 \\")
-            print("        --llm MiniMax-M2.7")
-            print()
-            return 1
-
-    if args.phase in ("phase2", "auto"):
-        # Phase 2 llm_func：优先用 --llm 指定模型，否则自动从 session 获取
-        if not llm_func:
-            if args.llm:
-                # 用户指定了模型名
-                llm_func = get_runtime_llm(agent_id=args.agent_id).make_llm_func(model=args.llm)
-                print(f"✅ 使用指定模型: {args.llm}")
-            else:
-                # 自动从 session 获取
-                try:
-                    rllm = get_runtime_llm(agent_id=args.agent_id)
-                    model = rllm.current_model()
-                    llm_func = rllm.make_llm_func()
-                    print(f"✅ 自动使用当前 session 模型: {model}")
-                except Exception as e:
-                    print(f"❌ Phase 2 需要 llm_func，但无法获取 session 配置: {e}")
-                    print("   请用 --llm 参数指定模型，或从 OpenClaw session 内调用")
-                    return 1
+    # llm_func 由 orchestrator 内部通过 get_session_llm_func() 固化获取
+    # run_workflow.py 不再需要获取和传递 llm_func
 
     # 按 phase 执行
     if args.phase in ("phase1", "auto"):
-        if not run_phase1(paper_name, llm_func):
+        if not run_phase1(paper_name):
             return 1
 
     if args.phase in ("phase2", "auto"):
-        if not run_phase2(paper_name, llm_func):
+        if not run_phase2(paper_name):
             return 1
 
     if args.phase in ("phase3", "auto"):
@@ -1286,7 +1231,7 @@ def main():
 
     if args.phase in ("phase3_5", "auto"):
         print(f"\n📝 Phase 3.5: 深度学术评审")
-        r = orchestrate_phase3_5(paper_name, llm_func=llm_func)
+        r = orchestrate_phase3_5(paper_name)
         if not r.get("ok"):
             print(f"❌ Phase 3.5 失败: {r.get('error')}")
             return 1
@@ -1297,13 +1242,13 @@ def main():
         while r.get("p0_count", 0) > 0 and review_round <= max_rounds:
             print(f"\n🔄 审核 Loop 第 {review_round} 轮：发现 {r.get('p0_count', 0)} 个 P0，自动修复...")
             from orchestrator_v2 import auto_fix_p0_issues
-            fix_r = auto_fix_p0_issues(paper_name, llm_func=llm_func)
+            fix_r = auto_fix_p0_issues(paper_name)
             if not fix_r.get("ok"):
                 print(f"❌ P0 修复失败: {fix_r.get('error')}")
                 break
             print(f"   已修复 {fix_r.get('fixed', 0)}/{fix_r.get('total', 0)} 个 P0")
             # 重审
-            r = orchestrate_phase3_5(paper_name, llm_func=llm_func)
+            r = orchestrate_phase3_5(paper_name)
             if not r.get("ok"):
                 print(f"❌ 重审失败: {r.get('error')}")
                 break
@@ -1317,7 +1262,7 @@ def main():
 
     if args.phase in ("phase4", "auto"):
         print(f"\n📝 Phase 4: 整合修复")
-        r = orchestrate_phase4(paper_name, llm_func=llm_func)
+        r = orchestrate_phase4(paper_name)
         if not r.get("ok"):
             print(f"❌ Phase 4 失败: {r.get('error')}")
             return 1
