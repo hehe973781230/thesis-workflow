@@ -23,6 +23,7 @@ import sys
 import threading
 import urllib.request
 from pathlib import Path
+from research_tools import get_runtime_llm
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -72,261 +73,17 @@ WORKSPACE = Path(os.environ.get(
 #   2. agent plugin catalog → provider baseUrl + apiKey
 # ============================================================
 
-class RuntimeLLM:
-    """
-    复用当前运行 session 的模型配置，构造 llm_func。
-
-    完全零硬编码 agent_id / model / API key。
-    动态从以下位置读取：
-      - openclaw sessions list --all-agents --active 30 --json → 当前 session 模型名 + provider
-      - agent plugin catalog → provider baseUrl + apiKey + apiType
-    """
-
-    def __init__(self, agent_id: Optional[str] = None):
-        self._session_info: Optional[Dict] = None
-        self._lock = threading.Lock()
-        self._agent_id = agent_id  # 保存传入的 agent_id，用于精确限定 session 查询
-
-    # ---- 内部：获取当前 agent 的 openclaw 可执行文件路径 ----
-    @staticmethod
-    def _find_openclaw() -> str:
-        """查找 openclaw CLI 路径"""
-        # 1. 尝试 nvm node 目录下的 openclaw
-        home = Path.home()
-        nvm_openclaw = (
-            home / ".nvm/versions/node/v24.14.0/bin/openclaw"
-        )
-        if nvm_openclaw.exists():
-            return str(nvm_openclaw)
-
-        # 2. 尝试 PATH 中的 openclaw
-        for path in os.environ.get("PATH", "").split(os.pathsep):
-            candidate = Path(path) / "openclaw"
-            if candidate.exists() and not candidate.is_dir():
-                return str(candidate)
-
-        raise RuntimeError("找不到 openclaw CLI，请确保已安装并位于 PATH 中")
-
-    # ---- 内部：从当前运行 session 获取模型信息 ----
-    def _get_session_info(self) -> Dict:
-        """
-        通过 openclaw sessions list --agent <agent_id> --active 30 获取当前 session 信息。
-
-        用 --agent 精确限定为当前 agent，避免 background 场景下 sessions[0] 指向其他 agent。
-        """
-        try:
-            openclaw_path = self._find_openclaw()
-
-            # 构造命令：用 --agent 精确限定，避免 sessions[0] 误取其他 agent 的 session
-            cmd = [
-                openclaw_path, "sessions", "list",
-                "--active", "30",
-                "--json"
-            ]
-            if self._agent_id:
-                cmd.extend(["--agent", self._agent_id])
-            else:
-                # 无 agent_id 时退化使用 --all-agents，但注释说明风险
-                cmd.append("--all-agents")
-
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            if result.returncode != 0:
-                raise RuntimeError(f"openclaw sessions list failed: {result.stderr}")
-
-            data = json.loads(result.stdout)
-            sessions = data.get("sessions", [])
-            if not sessions:
-                raise RuntimeError("未找到活跃 session（30分钟内）")
-
-            # 已通过 --agent 精确限定，当前 agent 的 session 必在 sessions[0]
-            current = sessions[0]
-            session_key = current.get("key", "")  # e.g. agent:zz:feishu:direct:ou_xxx
-
-            # 从 session key 解析 agent_id
-            parts = session_key.split(":")
-            resolved_agent_id = parts[1] if len(parts) >= 2 else "unknown"
-
-            # 防御性校验：若传入了 agent_id 但解析结果不匹配，说明路由异常
-            if self._agent_id and resolved_agent_id != self._agent_id:
-                raise RuntimeError(
-                    f"session agent 不匹配：期望 {self._agent_id}，实际 {resolved_agent_id}。"
-                    f"session_key={session_key}"
-                )
-
-            return {
-                "model": current.get("model", ""),
-                "provider": current.get("modelProvider", ""),
-                "agent_id": resolved_agent_id,
-                "session_key": session_key,
-            }
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("openclaw sessions list 超时")
-        except Exception as e:
-            raise RuntimeError(f"读取 session 信息失败: {e}")
-
-    # ---- 内部：从 agent plugin catalog 读取 provider 凭证 ----
-    def _get_provider_config(self, provider: str, agent_id: str) -> Dict:
-        """
-        从 ~/.openclaw/agents/{agent_id}/agent/plugins/*/catalog.json 读取凭证。
-
-        plugin 目录名（如 minimax）可能与 provider 名（如 minimax-cn）不同，
-        所以需要扫描 plugins/ 下所有子目录，找包含目标 provider 的 catalog。
-        """
-        plugins_base = Path.home() / ".openclaw" / "agents" / agent_id / "agent" / "plugins"
-
-        if not plugins_base.exists():
-            raise RuntimeError(f"plugins 目录不存在: {plugins_base}")
-
-        catalog_path = None
-        for subdir in plugins_base.iterdir():
-            if not subdir.is_dir():
-                continue
-            candidate = subdir / "catalog.json"
-            if candidate.exists():
-                try:
-                    with open(candidate) as f:
-                        catalog = json.load(f)
-                    providers = catalog.get("providers", {})
-                    if provider in providers or "minimax-cn" in providers:
-                        # 找到了包含目标 provider 的 catalog
-                        catalog_path = candidate
-                        break
-                except Exception:
-                    continue
-
-        if not catalog_path:
-            raise RuntimeError(
-                f"在 {plugins_base} 下未找到包含 provider '{provider}' 的 catalog"
-            )
-
-        with open(catalog_path) as f:
-            catalog = json.load(f)
-
-        providers = catalog.get("providers", {})
-        # 精确匹配 provider，再尝试 minimax-cn 作为 fallback
-        cfg = providers.get(provider) or providers.get("minimax-cn", {})
-
-        if not cfg:
-            raise RuntimeError(f"provider '{provider}' 未在 catalog 中找到")
-
-        return {
-            "base_url": cfg["baseUrl"],
-            "api_key": cfg["apiKey"],
-            "api_type": cfg.get("api", "anthropic-messages"),
-        }
-
-    # ---- 公开接口：构造 llm_func ----
-    def make_llm_func(self, model: Optional[str] = None) -> Callable[[str], str]:
-        """
-        返回 llm_func(prompt: str) -> str。
-
-        参数 model 为 None 时，自动使用当前 session 的模型。
-        """
-        if self._session_info is None:
-            with self._lock:
-                if self._session_info is None:
-                    self._session_info = self._get_session_info()
-
-        target_model = model or self._session_info["model"]
-        provider = self._session_info["provider"]
-        agent_id = self._session_info["agent_id"]
-
-        provider_cfg = self._get_provider_config(provider, agent_id)
-        base_url = provider_cfg["base_url"]
-        api_key = provider_cfg["api_key"]
-        api_type = provider_cfg["api_type"]
-
-        def llm_func(prompt: str) -> str:
-            if api_type == "anthropic-messages":
-                return self._call_anthropic(base_url, api_key, target_model, prompt)
-            else:
-                # openai-completions 格式（deepseek 等）
-                return self._call_openai(base_url, api_key, target_model, prompt)
-
-        return llm_func
-
-    def _call_anthropic(self, base_url: str, api_key: str, model: str, prompt: str) -> str:
-        """调用 Anthropic-format API（minimax-cn 等）"""
-        payload = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 4096,
-        }
-        data = json.dumps(payload).encode()
-        req = urllib.request.Request(
-            f"{base_url}/v1/messages",
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-            },
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            result = json.loads(resp.read())
-
-        # 从 content 数组中提取 type=="text" 的块
-        for block in result.get("content", []):
-            if block.get("type") == "text":
-                return block["text"]
-
-        stop_reason = result.get("stop_reason", "")
-        if stop_reason == "max_tokens":
-            raise RuntimeError("LLM 返回被截断（max_tokens），请增加 max_tokens 参数")
-        raise RuntimeError(f"LLM 响应为空，stop_reason={stop_reason}")
-
-    def _call_openai(self, base_url: str, api_key: str, model: str, prompt: str) -> str:
-        """调用 OpenAI-completions-format API（deepseek 等）"""
-        payload = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 4096,
-        }
-        data = json.dumps(payload).encode()
-        req = urllib.request.Request(
-            f"{base_url}/chat/completions",
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            result = json.loads(resp.read())
-        return result["choices"][0]["message"]["content"]
-
-    def current_model(self) -> str:
-        """返回当前 session 使用的模型"""
-        if self._session_info is None:
-            with self._lock:
-                if self._session_info is None:
-                    self._session_info = self._get_session_info()
-        return self._session_info["model"]
-
-    def current_agent_id(self) -> str:
-        """返回当前 agent ID"""
-        if self._session_info is None:
-            with self._lock:
-                if self._session_info is None:
-                    self._session_info = self._get_session_info()
-        return self._session_info["agent_id"]
-
-
-# 全局单例（延迟初始化）
-_runtime_llm: Optional[RuntimeLLM] = None
-
-
-def get_runtime_llm(agent_id: Optional[str] = None) -> RuntimeLLM:
-    """获取 RuntimeLLM 全局单例
-
-    agent_id 仅在首次创建时生效；已创建则忽略（保持单例行为）。
-    """
-    global _runtime_llm
-    if _runtime_llm is None:
-        _runtime_llm = RuntimeLLM(agent_id=agent_id)
-    return _runtime_llm
+def _find_openclaw() -> str:
+    """查找 openclaw CLI 路径"""
+    home = Path.home()
+    nvm_openclaw = home / ".nvm/versions/node/v24.14.0/bin/openclaw"
+    if nvm_openclaw.exists():
+        return str(nvm_openclaw)
+    for path in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = Path(path) / "openclaw"
+        if candidate.exists() and not candidate.is_dir():
+            return str(candidate)
+    raise RuntimeError("找不到 openclaw CLI，请确保已安装并位于 PATH 中")
 
 
 # ============================================================
@@ -422,7 +179,7 @@ def _check_openclaw_cli():
     # 环境变量 THESIS_SKIP_CLI_CHECK=1 时跳过 OpenClaw CLI 检测
     if os.environ.get("THESIS_SKIP_CLI_CHECK") == "1":
         return True
-    openclaw_path = RuntimeLLM._find_openclaw()
+    openclaw_path = _find_openclaw()
     result = subprocess.run(
         [openclaw_path, "gateway", "status", "--deep"],
         capture_output=True, text=True, timeout=15
@@ -500,7 +257,7 @@ def _install_mineru():
 
 def _check_skill(name: str):
     """检查 skill 是否已安装"""
-    openclaw_path = RuntimeLLM._find_openclaw()
+    openclaw_path = _find_openclaw()
     result = subprocess.run(
         [openclaw_path, "skills", "list", "--json"],
         capture_output=True, text=True, timeout=10
@@ -515,7 +272,7 @@ def _check_skill(name: str):
 
 
 def _install_skill(name: str):
-    openclaw_path = RuntimeLLM._find_openclaw()
+    openclaw_path = _find_openclaw()
     r = subprocess.run(
         [openclaw_path, "skills", "install", name],
         capture_output=True, text=True, timeout=60
