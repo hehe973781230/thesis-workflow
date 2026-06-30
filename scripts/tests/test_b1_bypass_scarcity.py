@@ -158,7 +158,7 @@ class TestOrchestratePhase2HIL(unittest.TestCase):
     def test_orchestrate_phase2_returns_needs_user_input(self):
         """测试 4：orchestrate_phase2 收到 needs_user_input 时单独返回，不进 pending_review"""
         # orchestrate_phase2 调用 write_single_node
-        result = orchestrate_phase2(TEST_PAPER, llm_func=mock_llm)
+        result = orchestrate_phase2(TEST_PAPER)
 
         # 应该返回 needs_user_input action，而不是 wait_for_user
         self.assertTrue(result.get("ok"))

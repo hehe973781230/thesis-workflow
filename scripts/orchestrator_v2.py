@@ -210,7 +210,6 @@ def orchestrate_phase1_1(
     paper_name: str,
     input_type: str,
     input_data: str,
-    llm_func: Callable[[str], str] = None,
     docx_path: str = None
 ) -> Dict[str, Any]:
     """
@@ -226,7 +225,6 @@ def orchestrate_phase1_1(
       paper_name: 论文名
       input_type: "docx" | "text" (拍板 #3 禁用 auto)
       input_data: docx_path 或 outline_text(取决于 input_type)
-      llm_func: LLM 调用函数(可选,AI 兑底匹配标题)
       docx_path: 保留与 input_data 重复(兼容调用方习惯)
 
     返回:
@@ -2063,7 +2061,7 @@ def orchestrate(paper_name: str,
             # P0-1 修复：收到新开题报告时强制重置 state，确保从 Phase 1.1 开始
             # 龙哥指令：直接重置，不需要确认
             reset_orchestrate_state(paper_name)
-            return orchestrate_phase1_1(paper_name, input_type, input_data, None, docx_path)
+            return orchestrate_phase1_1(paper_name, input_type, input_data, docx_path)
         elif action == "phase1_confirm":
             return confirm_phase1(paper_name)
         elif action == "phase1_3_submit":

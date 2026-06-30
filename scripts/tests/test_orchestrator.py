@@ -173,7 +173,7 @@ class TestOrchestrate(unittest.TestCase):
         confirm_phase1(self.paper_name)
         result = orchestrate(self.paper_name, phase="phase2")
         self.assertFalse(result["ok"])
-        self.assertIn("llm_func", result["error"])
+        self.assertIn("无法获取 session LLM 配置", result["error"])
 
 
 # ============================================================
