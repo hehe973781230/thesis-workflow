@@ -1181,6 +1181,70 @@ def extract_content_hints(
     return content_hints
 
 
+def _extract_keywords_from_hint(hint_text: str) -> List[str]:
+    """
+    从 content_hint（Phase 1.3 提取的开题报告段落原文）中提炼检索关键词。
+
+    策略：
+      1. 识别公司名（vivo/华为/小米/OPPO）—— 用于定向检索
+      2. 识别行业词（互联网分发/应用商店/信息流/终端分发）
+      3. 识别业务词（AI/大模型/竞争战略/数字化转型）
+      4. 组合为检索词（最多5个，去重）
+
+    注意：这些关键词仅用于 Phase 2 数据检索，正文写作时替换为代号。
+
+    参数：
+      hint_text: 节点对应的 content_hint 文本
+
+    返回：
+      List[str]，如 ["vivo", "互联网分发", "竞争战略"]
+    """
+    if not hint_text:
+        return []
+
+    keywords: List[str] = []
+
+    # 公司名模式（仅用于 Phase 2 检索，正文以 A公司 呈现）
+    company_patterns = [
+        "vivo", "华为", "小米", "OPPO", "一加", "realme",
+        "荣耀", "三星", "苹果", "苹果公司", "华为公司",
+        "vivo公司", "OPPO公司", "小米公司"
+    ]
+    # 行业词模式
+    industry_patterns = [
+        "互联网分发", "应用分发", "信息流", "应用商店",
+        "终端分发", "移动分发", "智能手机", "智能终端",
+        "平台经济", "双边市场"
+    ]
+    # 业务/技术词模式
+    business_patterns = [
+        "AI", "大模型", "人工智能", "竞争战略", "数字化转型",
+        "差异化", "集中化", "成本领先", "生态协同", "网络效应",
+        "端云协同", "隐私计算", "个性化推荐", "商业化变现"
+    ]
+
+    all_patterns = company_patterns + industry_patterns + business_patterns
+    seen = set()
+    for p in all_patterns:
+        if p in hint_text and p not in seen:
+            # 归一化公司名（去掉"公司"二字，保持一致）
+            kw = p.replace("公司", "").strip()
+            if kw and kw not in seen:
+                seen.add(kw)
+                keywords.append(kw)
+
+    # 优先保留公司名（最精准），其次行业词，其次业务词
+    def _priority(kw: str) -> int:
+        if kw in [c.replace("公司", "") for c in company_patterns]:
+            return 0
+        if kw in [i.replace("公司", "") for i in industry_patterns]:
+            return 1
+        return 2
+
+    keywords.sort(key=_priority)
+    return keywords[:5]
+
+
 def save_content_hints_to_outline(paper_name: str, content_hints: Dict[str, str]) -> Dict[str, Any]:
     """
     将 extract_content_hints() 返回的 {node_id: hint_text} 写入 outline_state。
@@ -1226,18 +1290,23 @@ def save_content_hints_to_outline(paper_name: str, content_hints: Dict[str, str]
         if key not in node_ids:
             skipped += 1
             continue
-        # 写入节点 content_hint
+        # 写入节点 content_hint + research_keywords
         for n in nodes:
             if n["id"] == key:
                 n["content_hint"] = hint
+                # P0 修复：同时提炼并写入 research_keywords（供 Phase 2 多工具检索使用）
+                n["research_keywords"] = _extract_keywords_from_hint(hint)
                 written += 1
                 break
 
     # P2-1 fix: 初始化所有节点的 content_hint 字段（无 hint 的节点设为空字符串）
-    # 这样 context_builder 读取时能统一用 node.get("content_hint", "") 判断
+    # P0 修复：同时初始化 research_keywords 字段（无关键词的节点设为空列表）
+    # 这样 context_builder 读取时能统一用 .get() 判断
     for n in nodes:
         if "content_hint" not in n:
             n["content_hint"] = ""
+        if "research_keywords" not in n:
+            n["research_keywords"] = []
 
     # P1 修复：使用 helper 多版本兼容写回
     _set_outline_nodes(state, nodes)
