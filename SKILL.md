@@ -1,10 +1,10 @@
 ---
 name: thesis-workflow-v2
-description: "v2.1（测试版）：新增版本管理策略（方案一+选项B）+ Phase 3.5/4/5 + multi-search。outline-anchored 设计 + 9 HIL 节点 + 真实 CLI 入口。⚠️ 测试版，需独立安装（不覆盖 v1）。"
+description: "v2 新框架（beta）：Phase 3.5/4/5 + BGE向量匹配 + multi-search。v2 重构为 outline-anchored 设计 + 9 HIL 节点 + 真实 CLI 入口。⚠️ 测试版，需独立安装（不覆盖 v1）。"
 metadata:
   clawdbot:
     emoji: "📝"
-    version: "2.1.1-beta.3"   # 单一真实来源，发布前必须先改这里。发布规则见 scripts/release.py
+    version: "2.1.1-beta.4"   # 单一真实来源，发布前必须先改这里。发布规则见 scripts/release.py
     requires: {}
     os: ["linux", "darwin", "win32"]
 ---
@@ -21,64 +21,6 @@ metadata:
 - 用户明确要求导出 `.docx` 格式且文件性质为学术论文
 
 **正确流程：** 写作语法预检 → Review Agent 终审（`scripts/loop_self_check.py` 校验通过）→ `scripts/md2docx_strict.py` 合规转换 → Word 输出
-
----
-
-## 📁 版本管理策略（v2.1 新增）
-
-> **目的**：避免历史数据和中间版本对待写论文产生污染。每次新任务或重新开始时，物理隔离旧数据。
-
-### 目录与版本号规则
-
-- **Workspace 根路径**：`~/.openclaw/workspace/`
-- **版本目录命名**：`{论文题目}_v{n}.0/`
-  - 例：`A公司互联网分发业务竞争战略研究_v7.0/`
-  - 每次新任务或"重新开始" → 版本号 +1
-  - 旧版本目录**不删除**，物理隔离
-
-### 里程碑保留规则（日常）
-
-| 类型 | 保留内容 | 清理时机 |
-|------|---------|---------|
-| **终稿** | `v*_终稿.docx` | 答辩通过后删其他 |
-| **评审稿** | `v*_整合版.docx`（Phase3产物） | 下一版本整合后删 |
-| **中间稿** | `*_v2.md`、`*.bak` | 下一版本开始时删 |
-
-### 答辩后归档流程
-
-1. 答辩正式通过后
-2. **保留**：`论文_A公司_v最终版.docx`（最终答辩稿）
-3. **删除**：所有 `v*.*/` 中间目录
-4. **可选**：压缩包备份（`v6.0.zip` 等）
-
-### 有效文件规则（防污染）
-
-- `chX_X.X_章节名.md` = 当前正式版本
-- `chX_X.X_章节名_v2.md` = 中间版本（仅供参考，不参与写作流程）
-- `*.md.bak` = 备份文件（Orchestrator 不读取）
-- **Orchestrator 只读取无后缀的 md 文件**
-
-### 启动时检测逻辑
-
-当 Skill 检测到 `~/.openclaw/workspace/` 下已存在同名论文目录时，在 **Phase 1 入口** 增加 HIL 确认：
-
-```
-⚠️ 检测到已有版本目录：[旧版本路径]
-请选择：
-  A) 继续旧项目 [读取现有状态，继续写作]
-  B) 从新开始 [在 workspace 下创建新版本目录 v{n+1}.0，旧目录保留]
-  C) 指定版本号 [自定义版本目录名]
-```
-
-### 状态文件初始化（"从新开始"时）
-
-执行"从新开始"时，Orchestrator 自动执行：
-1. `_orchestrate_state.json` → 重置 `completed_nodes=[]`、`phase=phase1`
-2. `_outline_state.json` → 保留大纲结构，重置节点完成状态
-3. 现有 `ch*.md` 文件 → 重命名为 `*.md.bak`（不删除，可恢复）
-4. 保留 `开题报告.md`（新任务可能复用）
-
----
 
 ## 核心架构
 
@@ -176,30 +118,6 @@ Orchestrator 遍历 outline 树中的每个节点，调用 `write_single_node()`
 - 分析维度建议（规则推导）
 - 开题报告方向参考（content_hint）
 - 行业数据参考（quick_search 多工具检索）
-- **同级章节横向上下文（MECE 边界划定）**（新增 v2.1.1）
-
-#### 同级章节横向上下文注入（MECE 保障）
-
-通过 `build_sibling_chapter_context()` 自动注入同级章节预览，实现 MECE 边界划定：
-- 列出同父节点下所有同级章节的 `node_id`、`title`、`content_hint`
-- 无 `content_hint` 的章节仅标注标题
-- 自动生成【本章范围界定】，明确 ✅ 负责内容和 ❌ 不应重复的内容
-- 作用：避免同级章节重复、MECE 原则可落地执行
-
-输出示例：
-```plain_text
-【同级章节预览】（本章：5.1 SWOT分析）
-
- 5.2 竞争战略选择
- → 方向：基于SWOT结论，对比成本领先/差异化/集中化三种战略优劣势
-
- 5.3 战略实施路径
- → 方向：[无content_hint，仅标题]
-
-【本章范围界定】
- ✅ 5.1 负责：S/W/O/T四象限分析，各要素打分
- ❌ 5.2 负责：战略对比与选择结论（不要在5.1写最终战略结论）
-```
 
 **Phase 2 强制检索要求**（关键词中的 `{论文主题行业}` 由 Orchestrator 自动提取）：
 - 第3章 PESTEL 分析前 → 多工具并行搜索「{论文主题行业} 市场规模/趋势/政策」
@@ -398,3 +316,202 @@ thesis-workflow/
     ├── checklist.md            ← 学术规范人工对照清单
     └── loop-design.md          ← Loop 设计原理说明
 ```
+
+## 附录 A：论文项目运行 Checklist（agent 必遵守）
+
+> **来源**：v7.0 事故复盘 → 龙哥 22:19 反馈 / 2026-06-29  
+> **适用对象**：跑 thesis-workflow-v2 的任何 agent（含 main session 和 isolated）  
+> **生效日期**：2026-06-29 起
+
+### A.1 触发即汇报
+
+启动任何 thesis-workflow-v2 阶段前，先发一条汇报：
+- 论文名 / 阶段 / 启动时间 / 监考路径（如有 PID/log）
+- 5-30 字，简洁不啰嗦
+
+### A.2 阶段切换必汇报
+
+- Phase 1 → Phase 2（写作开始）
+- Phase 2 → Phase 3（整合开始）
+- Phase 3 → Phase 3.5（评审开始）
+- Phase 3.5 → Phase 4 / Phase 5（终审/导出）
+
+每切换发一条"已到 X 阶段"短汇报。
+
+### A.3 长跑阶段主动节拍
+
+Phase 2 写作阶段（如有 background 任务）：
+
+| 进度节点 | 必汇报 |
+|---------|--------|
+| 启动 | ✅ |
+| 完成 25% | ✅ |
+| 完成 50% | ✅ |
+| 完成 75% | ✅ |
+| 完成 100% / 失败 | ✅ |
+
+- 每次汇报含当前 `completed_nodes` 数量
+- 用 `cat _orchestrate_state.json` 拿实时数据
+
+### A.4 异常即停 + 主动汇报
+
+触发任一异常情况，**立即**停下来汇报（不等用户问）：
+- content_hint 覆盖率 < 50% → Phase 1.3 异常
+- 大量节点 failed → Phase 2 失败
+- 整合版字数异常（< 30k 或 > 200k）
+- outline_state 节点结构与 _orchestrate_state 不一致
+
+### A.5 完成必汇报（含产出清单）
+
+论文交付时，必汇报：
+- 终稿路径
+- 字数（中文字数 / 总字符数）
+- 章节完成情况
+- 异常/缺陷（如有）
+- 邮件/通知状态
+
+### A.6 红线禁止（继承自 AGENTS.md）
+
+- ❌ 跳过 run_workflow.py 操作状态文件
+- ❌ 不汇报长任务进度
+- ❌ Phase 1.3 / 1.1 直接调用 Python API
+- ❌ 状态文件手工修改 phase*_status 字段
+
+### A.7 辅助工具（可选）
+
+如需手动查看状态，可用：
+```bash
+python3 ~/.openclaw/scripts/thesis_progress_reporter.py --idle-minutes 60
+```
+
+脚本全局通用，跨 macOS/Linux/Windows，纯 stdlib。idle 60min 自动静默。
+
+## 附录 B：已批准改进方案 — 大纲约束注入（已实施 2026-06-30）
+
+> **来源**：v7.0 事故复盘 → 龙哥 22:19 反馈，Q3=A / 2026-06-29  
+> **实施状态**：✅ 已实施并验收（2026-06-30）
+> **注意**：本附录不绑具体版本号。以 SKILL.md frontmatter 的 `metadata.clawdbot.version` 为当前 skill 真实版本。
+
+### B.1 背景
+
+v7.0 Phase 2 跑题事故显示：当 `node.content_hint` 为空时，LLM 写作完全依赖章节标题推断上下文，导致 LLM 写出通用 MBA 论文（"数字经济转型"），跑偏具体研究对象（A 公司 / vivo / 互联网分发）。
+
+### B.2 目标
+
+当 `node.content_hint` 为空时，**不**直接让 LLM 写，而是构造一个"大纲骨架 + 反面警示"的 prompt 约束，确保不跑题。
+
+### B.3 实施方案
+
+修改 `scripts/context_builder.py` 的 `build_prompt_package()` 函数：
+
+```python
+# 现有逻辑
+content_hint = current.get("content_hint", "").strip()
+
+# v2.x.x 新增（v7.0 跑题事故修复）：当 content_hint 为空时，注入大纲骨架 + 反面警示
+if not content_hint and state:
+    outline_skeleton = _build_outline_skeleton(state, node_id)
+    paper_subject = _extract_paper_subject(paper_name, state)
+    warning_block = _build_no_runoff_warning(paper_subject)
+    content_hint = f"{warning_block}\n\n{outline_skeleton}"
+
+package = { ..., "content_hint": content_hint, ... }
+```
+
+#### B.3.1 新增辅助函数
+
+```python
+def _extract_paper_subject(paper_name: str, outline_state: Optional[Dict] = None) -> str:
+    """提取论文主题描述（用于 warning 主题锁定）
+
+    策略：
+      1. 优先从 outline_state["outline_tree"]["metadata"]["paper_title"] 读
+      2. 否则从 paper_name 去掉版本号后缀
+      3. 兜底返回 paper_name
+    """
+    if outline_state:
+        try:
+            title = outline_state.get("outline", {}).get("outline_tree", {}).get("metadata", {}).get("paper_title")
+            if title and title.strip():
+                return title.strip()
+        except Exception:
+            pass
+    import re as _re
+    subject = _re.sub(r'(_v\d+(?:\.\d+)*|_final|_\d{8}_\d{6})+$', '', paper_name)
+    return subject if subject else paper_name
+
+
+def _build_outline_skeleton(outline_state: Dict, target_node_id: str) -> str:
+    """构造论文大纲骨架"""
+    try:
+        nodes = outline_state.get("outline", {}).get("outline_tree", {}).get("nodes", [])
+    except Exception:
+        return ""
+    lines = ["【论文完整大纲（用于提供上下文）】", ""]
+    for n in nodes:
+        if n.get("is_virtual"):
+            continue
+        level = n.get("level", 2)
+        prefix = "#" * level
+        lines.append(f"{prefix} {n['id']} {n.get('title', '')}")
+    lines.append("")
+    lines.append("【你正在写的节点】")
+    target = next((n for n in nodes if n.get("id") == target_node_id), None)
+    if target:
+        lines.append(f"→ {target.get('title', target_node_id)}（{target_node_id}）")
+    return "\n".join(lines)
+
+
+def _build_no_runoff_warning(paper_subject: str = "本研究主题") -> str:
+    """反面警示：明确禁止跑题
+
+    paper_subject: 论文研究对象描述（建议从 outline metadata.paper_title 取）
+    """
+    return (
+        f"⚠️ 主题锁定：本论文研究对象是「{paper_subject}」。\n"
+        "- ✅ 围绕论文具体研究对象的真实业务场景、技术路线、客户/竞争格局等具体实体\n"
+        "- ✅ 引用与论文主题相关的权威数据源（行业报告 / 学术文献 / 公司财报）\n"
+        "- ❌ 严禁写成通用 MBA 模板论文（如「数字经济 / 企业数字化转型 / 战略管理一般性理论」）\n"
+        "- ❌ 严禁「党的二十大报告提出…」这类脱离论文研究主题的泛泛话语\n"
+        "- ❌ 严禁用「企业四要素模型 / 波特钻石模型」等通用教科书内容代替研究主题的具体业务场景"
+    )
+```
+
+#### B.3.2 关键设计要点
+
+1. **不破坏现有 `content_hint` 非空的路径**：只有当 hint 为空时才插入骨架
+2. **token 成本低**：大纲骨架 < 1 KB，比塞全文 content（100 KB+）省得多
+3. **覆盖完整**：即使 50 个节点 hint 全空，prompt 里仍有大纲骨架明确"我在写论文 X 章节 Y"
+4. **反面警示**：LLM 习惯正面 prompt，加"❌ 严禁"反向约束效果更好
+
+### B.4 测试用例
+
+```python
+def test_content_hint_empty_should_use_skeleton():
+    """given: node.content_hint = '' when: build_prompt_package then: package['content_hint'] 含大纲骨架 + 反面警示"""
+    pass
+
+def test_content_hint_present_should_unchanged():
+    """given: node.content_hint = 'A公司2024年...' when: build_prompt_package then: package['content_hint'] == 原 hint"""
+    pass
+```
+
+### B.5 验收标准
+
+- [x] `_build_outline_skeleton` 输出 < 1500 字（实测 1281 字符）
+- [x] `_build_no_runoff_warning` 输出含至少 3 个 ❌ 禁止项（实测 3 个）
+- [x] 现有非空 hint 路径 PASS（7.2 节点回归通过）
+- [x] Phase 2 跑 1 个节点，验证 prompt 含研究主题关键词（ch1 节点验证通过）
+- [x] 完整 content_hint < 2500 字（实测 1566 字符）
+- [x] 警告块参数化（_build_no_runoff_warning 接受 paper_subject 参数，不再硬编码 A 公司）
+
+### B.6 已完成行动
+
+- [x] 代码实施（context_builder.py + 3 个新函数 + 1 段 fallback 逻辑）
+- [x] 单元级验收（5+1 项 全部通过）
+- [x] 文档同步（SKILL.md 附录 B 代码块与实际代码一致）
+- [ ] CHANGELOG.md 同步（待 v2.0.7 升级时补充）
+- [ ] README.md 改进章节（待 v2.0.7 升级时补充）
+- [ ] ClawHub publish（待 v2.0.7 升级时发布）
+
+数据来源声明：本方案生成于 2026-06-29 龙哥对话，2026-06-30 完成 P0 修复。
