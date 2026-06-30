@@ -1180,7 +1180,8 @@ def extract_keywords_from_docx(
     docx_path: str,
     outline_tree: Dict,
     llm_func: Callable[[str], str] = None,
-    max_keywords_per_node: int = 5
+    max_keywords_per_node: int = 5,
+    proposal_result: Dict = None
 ) -> Dict[str, List[str]]:
     """
     从开题报告 docx 内容 + 大纲标题，为每个章节节点生成检索关键词。
@@ -1202,22 +1203,22 @@ def extract_keywords_from_docx(
       outline_tree: outline_parse() 返回的 outline 对象
       llm_func: LLM 调用函数
       max_keywords_per_node: 每个节点最多返回关键词数，默认5
+      proposal_result: 可选，已有的 extract_proposal_content 结果（避免重复调用）
 
     返回：
       {node_id: ["keyword1", "keyword2", ...], ...}
     """
-    # 1. 提取开题报告全文
-    paragraphs = extract_text_from_docx(docx_path)
-    full_text = "\n".join(paragraphs[:100])  # 取前100段，足够 LLM 理解主题
-
-    # 2. 获取所有节点
+    # 1. 获取所有节点
     try:
         nodes = _get_outline_nodes({"outline": outline_tree})
     except Exception:
         nodes = outline_tree.get("nodes", [])
 
-    # 3. 获取每个节点的内容（从 extract_proposal_content 的 node_segments）
-    result = extract_proposal_content(docx_path, outline_tree, llm_func=llm_func)
+    # 2. 获取每个节点的内容（复用 extract_proposal_content 结果，避免重复 LLM 调用）
+    if proposal_result is None:
+        result = extract_proposal_content(docx_path, outline_tree, llm_func=llm_func)
+    else:
+        result = proposal_result
     node_segments = result.get("node_segments", {})
 
     node_keywords: Dict[str, List[str]] = {}
@@ -1287,7 +1288,8 @@ def extract_content_hints(
     docx_path: str,
     outline_tree: Dict,
     llm_func: Callable[[str], str] = None,
-    max_hint_chars: int = 150
+    max_hint_chars: int = 150,
+    proposal_result: Dict = None
 ) -> Dict[str, str]:
     """
     从开题报告 docx 中提取每个节点的方向提示（content_hint）
@@ -1301,12 +1303,16 @@ def extract_content_hints(
       outline_tree: outline_parse() 返回的 outline 对象
       llm_func: LLM 调用函数（传入 extract_proposal_content）
       max_hint_chars: 每个 hint 的最大字符数，默认 150
+      proposal_result: 可选，已有的 extract_proposal_content 结果（避免重复调用）
 
     返回：
       {node_id: "方向提示文本", ...}
     """
-    # 调用 extract_proposal_content 获取每个节点的内容
-    result = extract_proposal_content(docx_path, outline_tree, llm_func=llm_func)
+    # 复用 extract_proposal_content 结果（避免重复 LLM 调用）
+    if proposal_result is None:
+        result = extract_proposal_content(docx_path, outline_tree, llm_func=llm_func)
+    else:
+        result = proposal_result
     if not result.get("ok"):
         return {}
 

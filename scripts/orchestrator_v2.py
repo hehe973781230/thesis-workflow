@@ -462,9 +462,9 @@ def orchestrate_phase1_3(
             "error": proposal_result.get("error", "开题报告提取失败")
         }
 
-    # 3. extract_content_hints 提炼
+    # 3. extract_content_hints 提炼（复用 proposal_result，避免重复 LLM 调用）
     content_hints = extract_content_hints(
-        docx_path, outline_tree, llm_func=llm_func
+        docx_path, outline_tree, llm_func=llm_func, proposal_result=proposal_result
     )
 
     # 4. save_content_hints_to_outline 写入 state
@@ -480,9 +480,9 @@ def orchestrate_phase1_3(
             "confirmed_at": None
         }
 
-    # 4.2 生成各节点检索关键词（LLM 从开题报告提取）
+    # 4.2 生成各节点检索关键词（LLM 从开题报告提取，复用 proposal_result）
     node_keywords = extract_keywords_from_docx(
-        docx_path, outline_tree, llm_func=llm_func
+        docx_path, outline_tree, llm_func=llm_func, proposal_result=proposal_result
     )
     # 将关键词写入 outline_state 各节点
     _outline_state = outline_load(paper_name)
