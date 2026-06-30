@@ -308,6 +308,13 @@ def orchestrate_phase1_1(
     # 增强项1:在每个 L1 章节末尾插入虚拟摘要节点
     outline = insert_chapter_summary_nodes(outline)
 
+    # P2-1 fix: 初始化所有节点的 content_hint 字段为空字符串
+    # 统一字段存在性，避免 context_builder 读取时需区分"字段不存在"和"值为空"
+    outline_tree = outline.get("outline_tree", {})
+    for n in outline_tree.get("nodes", []):
+        if "content_hint" not in n:
+            n["content_hint"] = ""
+
     # 持久化 outline_state(包含虚拟节点)
     outline_save(paper_name, outline)
 

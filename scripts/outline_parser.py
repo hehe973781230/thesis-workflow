@@ -905,6 +905,11 @@ def extract_proposal_content(
     # 章节标题模式
     heading_patterns = [
         (r'^第([一二三四五六七八九十\d]+)章\s*([^\n]{0,50})$', 'ch'),
+        # 中文数字章节号 + 顿号 + 标题（如：一、 研究背景与研究问题）
+        (r'^[一二三四五六七八九十\d]+[、\.]\s*([^\n]{2,50})$', 'cn_num'),
+        # 带括号的中文数字（如：（一）  研究背景）
+        (r'^\（([一二三四五六七八九十\d]+)\）\s*([^\n]{2,50})$', 'cn_paren'),
+        # 半角数字编号（如：1.  宏观与技术背景）
         (r'^(\d+(?:\.\d+){1,2})\s+([^\n]{2,50})$', 'num'),
     ]
 
@@ -961,6 +966,22 @@ def extract_proposal_content(
                     heading_to_node[heading_text] = node["id"]
                     break
 
+        # 中文数字编号 + 顿号/点号（如：一、 研究背景，或 1. 宏观与技术背景）
+        # → 尝试用 title_text 模糊匹配 node title
+        if heading_text not in heading_to_node and pat_type in ('cn_num', 'cn_paren'):
+            for node in nodes:
+                node_title = node.get("title", "")
+                if title_text and (title_text in node_title or node_title in title_text):
+                    heading_to_node[heading_text] = node["id"]
+                    break
+
+        # 数字编号（1. 宏观与技术背景）→ 直接匹配 node num
+        if heading_text not in heading_to_node and pat_type == 'num':
+            for node in nodes:
+                if str(node.get("num", "")) == num_str:
+                    heading_to_node[heading_text] = node["id"]
+                    break
+
     # 第二步：AI 标题匹配（未匹配的标题）
     unmatched_headings = [info for info in heading_info if info["text"] not in heading_to_node]
     ai_heading_matched_count = 0
@@ -981,8 +1002,14 @@ def extract_proposal_content(
                             "向量匹配: %s → [%s] (score=%.3f)",
                             heading_text, node_id, score,
                         )
-            except Exception:
-                pass  # 向量匹配失败 → 降级到 LLM 兜底
+            except Exception as e:
+                import logging
+                _logger = logging.getLogger(__name__)
+                _logger.warning(
+                    "[TitleMatcher] 向量匹配降级: heading_count=%d, error=%s",
+                    len(unmatched_headings), str(e)
+                )
+                # 继续走到 LLM 兜底逻辑
 
         # ── 2b: LLM 标题匹配（向量未匹配或无向量依赖时兜底）────
         still_unmatched = [
@@ -1205,6 +1232,12 @@ def save_content_hints_to_outline(paper_name: str, content_hints: Dict[str, str]
                 n["content_hint"] = hint
                 written += 1
                 break
+
+    # P2-1 fix: 初始化所有节点的 content_hint 字段（无 hint 的节点设为空字符串）
+    # 这样 context_builder 读取时能统一用 node.get("content_hint", "") 判断
+    for n in nodes:
+        if "content_hint" not in n:
+            n["content_hint"] = ""
 
     # P1 修复：使用 helper 多版本兼容写回
     _set_outline_nodes(state, nodes)
