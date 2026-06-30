@@ -1124,6 +1124,165 @@ def extract_proposal_content(
     }
 
 
+
+def extract_code_name_from_docx(
+    docx_path: str,
+    llm_func: Callable[[str], str] = None
+) -> Dict[str, Any]:
+    """
+    从开题报告 docx 文件名中提取去标识公司名（如 "A公司"）。
+
+    LLM 直接读文件名，根据论文标题上下文推断出论文用哪个字母代指目标公司。
+
+    参数：
+      docx_path: 开题报告 docx 文件路径
+      llm_func: LLM 调用函数
+
+    返回：
+      {"ok": bool, "code_name": str, "confidence": float}
+    """
+    import re as re_module
+    basename = os.path.basename(docx_path)
+
+    # 兜底：正则直接从文件名提取
+    m = re_module.search(r'([A-E])公司', basename)
+    if m:
+        code_name = m.group(0)  # "A公司"
+
+        # LLM 二次确认（仅在有 llm_func 时）
+        if llm_func:
+            prompt = f"""以下是一篇MBA论文的文件名，请找出其中用字母代指目标公司的部分（如"A公司"、"B公司"）。
+
+文件名：{basename}
+
+请直接回答：论文中用哪个字母代指目标公司？只回答字母，如"A公司"。"""
+            try:
+                response = llm_func(prompt).strip()
+                confirm_m = re_module.search(r'[A-E]公司', response)
+                if confirm_m:
+                    code_name = confirm_m.group(0)
+                    return {"ok": True, "code_name": code_name, "confidence": 0.95}
+            except Exception:
+                pass
+
+        return {"ok": True, "code_name": code_name, "confidence": 0.8}
+
+    # 完全兜底：从路径各层级搜索
+    for part in basename.split('/'):
+        m2 = re_module.search(r'([A-E])公司', part)
+        if m2:
+            return {"ok": True, "code_name": m2.group(0), "confidence": 0.7}
+
+    return {"ok": False, "code_name": None, "confidence": 0.0}
+
+
+def extract_keywords_from_docx(
+    docx_path: str,
+    outline_tree: Dict,
+    llm_func: Callable[[str], str] = None,
+    max_keywords_per_node: int = 5
+) -> Dict[str, List[str]]:
+    """
+    从开题报告 docx 内容 + 大纲标题，为每个章节节点生成检索关键词。
+
+    LLM 读取：
+    1. 开题报告全文（提取段落）
+    2. 该章节的大纲标题（理解上下文）
+    3. 该章节对应的开题报告内容
+
+    输出：该章节的检索关键词列表（最多5个）
+
+    数据流：
+      Phase 1.3 归因完成 → extract_keywords_from_docx() 生成各节点 keywords
+        → 写入 outline_state 各节点
+        → Phase 2 context_builder 读取用于检索
+
+    参数：
+      docx_path: 开题报告 docx 文件路径
+      outline_tree: outline_parse() 返回的 outline 对象
+      llm_func: LLM 调用函数
+      max_keywords_per_node: 每个节点最多返回关键词数，默认5
+
+    返回：
+      {node_id: ["keyword1", "keyword2", ...], ...}
+    """
+    # 1. 提取开题报告全文
+    paragraphs = extract_text_from_docx(docx_path)
+    full_text = "\n".join(paragraphs[:100])  # 取前100段，足够 LLM 理解主题
+
+    # 2. 获取所有节点
+    try:
+        nodes = _get_outline_nodes({"outline": outline_tree})
+    except Exception:
+        nodes = outline_tree.get("nodes", [])
+
+    # 3. 获取每个节点的内容（从 extract_proposal_content 的 node_segments）
+    result = extract_proposal_content(docx_path, outline_tree, llm_func=llm_func)
+    node_segments = result.get("node_segments", {})
+
+    node_keywords: Dict[str, List[str]] = {}
+
+    # 4. 对每个有内容的节点，LLM 生成关键词
+    for node in nodes:
+        node_id = node["id"]
+        if node_id.startswith("__"):
+            continue
+
+        segments = node_segments.get(node_id, [])
+        if not segments:
+            node_keywords[node_id] = []
+            continue
+
+        # 构建上下文：章节标题 + 内容摘要
+        node_title = node.get("title", "")
+        content_summary = "。".join([s.strip()[:80] for s in segments[:2]])
+
+        # 父章节标题（用于理解上下文）
+        parent_title = ""
+        parent_id = node.get("parent_id") or node.get("parent")
+        if parent_id:
+            parent = next((n for n in nodes if n["id"] == parent_id), None)
+            if parent:
+                parent_title = parent.get("title", "")
+
+        context = f"论文主题：竞争战略研究\n"
+        context += f"上级章节：{parent_title}\n" if parent_title else ""
+        context += f"本章标题：{node_title}\n"
+        context += f"本章内容摘要：{content_summary}"
+
+        prompt = f"""以下是一篇MBA论文中某一章节的信息，请为该章节生成检索关键词。
+
+{context}
+
+要求：
+1. 生成该章节在写作时需要检索的背景信息关键词
+2. 关键词应该是具体的、可检索的术语（如公司名、行业词、技术词、战略术语）
+3. 最多 {max_keywords_per_node} 个，按重要性排序
+4. 只返回关键词列表，每行一个，不要解释
+
+示例输出：
+vivo
+互联网分发
+竞争战略
+差异化
+生态协同"""
+
+        try:
+            if llm_func:
+                response = llm_func(prompt).strip()
+                # 解析关键词（每行一个，去除空白）
+                keywords = [k.strip() for k in response.split("\n") if k.strip()]
+                keywords = [k for k in keywords if len(k) > 1][:max_keywords_per_node]
+                node_keywords[node_id] = keywords
+            else:
+                node_keywords[node_id] = []
+        except Exception:
+            node_keywords[node_id] = []
+
+    return node_keywords
+
+
+
 def extract_content_hints(
     docx_path: str,
     outline_tree: Dict,
@@ -1183,66 +1342,44 @@ def extract_content_hints(
 
 def _extract_keywords_from_hint(hint_text: str) -> List[str]:
     """
-    从 content_hint（Phase 1.3 提取的开题报告段落原文）中提炼检索关键词。
+    备用：从 content_hint 纯文本提取关键词（Phase 1.3 未调用 LLM 时的兜底）。
 
-    策略：
-      1. 识别公司名（vivo/华为/小米/OPPO）—— 用于定向检索
-      2. 识别行业词（互联网分发/应用商店/信息流/终端分发）
-      3. 识别业务词（AI/大模型/竞争战略/数字化转型）
-      4. 组合为检索词（最多5个，去重）
+    不再使用预定义 pattern 库，改为基于文本特征的简单提取：
+    - 连续中文字符串（2-10字）
+    - 英文词/缩写
+    - 数字+单位组合
 
-    注意：这些关键词仅用于 Phase 2 数据检索，正文写作时替换为代号。
+    注意：关键词正式生成已迁移到 extract_keywords_from_docx()（Phase 1.3 LLM 生成）。
+    此函数仅作为兜底使用。
 
     参数：
       hint_text: 节点对应的 content_hint 文本
 
     返回：
-      List[str]，如 ["vivo", "互联网分发", "竞争战略"]
+      List[str]，最多5个
     """
     if not hint_text:
         return []
 
-    keywords: List[str] = []
-
-    # 公司名模式（仅用于 Phase 2 检索，正文以 A公司 呈现）
-    company_patterns = [
-        "vivo", "华为", "小米", "OPPO", "一加", "realme",
-        "荣耀", "三星", "苹果", "苹果公司", "华为公司",
-        "vivo公司", "OPPO公司", "小米公司"
-    ]
-    # 行业词模式
-    industry_patterns = [
-        "互联网分发", "应用分发", "信息流", "应用商店",
-        "终端分发", "移动分发", "智能手机", "智能终端",
-        "平台经济", "双边市场"
-    ]
-    # 业务/技术词模式
-    business_patterns = [
-        "AI", "大模型", "人工智能", "竞争战略", "数字化转型",
-        "差异化", "集中化", "成本领先", "生态协同", "网络效应",
-        "端云协同", "隐私计算", "个性化推荐", "商业化变现"
-    ]
-
-    all_patterns = company_patterns + industry_patterns + business_patterns
+    import re as re_module
+    keywords = []
     seen = set()
-    for p in all_patterns:
-        if p in hint_text and p not in seen:
-            # 归一化公司名（去掉"公司"二字，保持一致）
-            kw = p.replace("公司", "").strip()
-            if kw and kw not in seen:
-                seen.add(kw)
-                keywords.append(kw)
 
-    # 优先保留公司名（最精准），其次行业词，其次业务词
-    def _priority(kw: str) -> int:
-        if kw in [c.replace("公司", "") for c in company_patterns]:
-            return 0
-        if kw in [i.replace("公司", "") for i in industry_patterns]:
-            return 1
-        return 2
+    # 提取中文术语（2-10字的连续中文字符串）
+    for m in re_module.finditer(r'[\u4e00-\u9fff]{2,10}', hint_text):
+        kw = m.group(0)
+        if kw not in seen and len(kw) >= 2:
+            seen.add(kw)
+            keywords.append(kw)
 
-    keywords.sort(key=_priority)
-    return keywords[:5]
+    # 提取英文词/缩写
+    for m in re_module.finditer(r'[A-Za-z]{2,}(?:\s+[A-Za-z]{2,})*', hint_text):
+        kw = m.group(0).strip()
+        if kw and kw.lower() not in seen:
+            seen.add(kw.lower())
+            keywords.append(kw)
+
+    return list(set(keywords))[:5]
 
 
 def save_content_hints_to_outline(paper_name: str, content_hints: Dict[str, str]) -> Dict[str, Any]:

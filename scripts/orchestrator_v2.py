@@ -40,6 +40,8 @@ from outline_parser import (
     extract_content_hints,
     save_content_hints_to_outline,
     outline_parse,
+    extract_code_name_from_docx,
+    extract_keywords_from_docx,
 )
 from research_tools import get_session_llm_func
 
@@ -468,6 +470,34 @@ def orchestrate_phase1_3(
     # 4. save_content_hints_to_outline 写入 state
     save_result = save_content_hints_to_outline(paper_name, content_hints)
 
+    # 4.1 提取去标识公司名（code_name）
+    code_name_result = extract_code_name_from_docx(docx_path, llm_func=llm_func)
+    if code_name_result.get("ok"):
+        state["company_info"] = {
+            "code_name": code_name_result["code_name"],
+            "actual_name": None,  # actual_name 由用户在 Phase 1.1 HIL 手动填写
+            "confirmed": False,
+            "confirmed_at": None
+        }
+
+    # 4.2 生成各节点检索关键词（LLM 从开题报告提取）
+    node_keywords = extract_keywords_from_docx(
+        docx_path, outline_tree, llm_func=llm_func
+    )
+    # 将关键词写入 outline_state 各节点
+    _outline_state = outline_load(paper_name)
+    if _outline_state:
+        _nodes = _get_outline_nodes(_outline_state)
+        _node_ids = {n["id"] for n in _nodes}
+        for _node_id, _kw_list in node_keywords.items():
+            if _node_id in _node_ids:
+                for _n in _nodes:
+                    if _n["id"] == _node_id:
+                        _n["research_keywords"] = _kw_list
+                        break
+        _set_outline_nodes(_outline_state, _nodes)
+        outline_save(paper_name, _outline_state)
+
     # 5. 组装细粒度 node_details(拍板 #5)
     # 修复 P1-2:重命名 matched_count → matched_paragraphs_total,matched_paragraphs → matched_paragraphs_preview
     # 避免 matched_count=49 与 matched_paragraphs=list[3] 的数量不一致误解
@@ -503,6 +533,8 @@ def orchestrate_phase1_3(
             "undecided_segments": len(proposal_result.get("undecided_segments", [])),
             "hints_written": save_result.get("written", 0),
             "hints_skipped": save_result.get("skipped", 0),
+            "code_name": code_name_result.get("code_name"),
+            "keywords_generated": sum(1 for v in node_keywords.values() if v),
         },
         "node_details": node_details,
     }
