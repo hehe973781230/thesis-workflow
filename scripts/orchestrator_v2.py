@@ -161,6 +161,7 @@ from state_manager_v2 import (
     load_orchestrate_state,
     save_orchestrate_state,
     init_orchestrate_state,
+    reset_orchestrate_state,
     update_progress,
 )
 
@@ -1971,6 +1972,12 @@ def orchestrate(paper_name: str,
     """
     state = load_orchestrate_state(paper_name)
 
+    # P1-3 修复：phase1 专属 action 应始终路由到 phase="phase1"
+    # 避免 state 中残留 phase1_confirmed=True / phase="phase2" 时误导路由
+    if action in ("phase1_1_init", "phase1_confirm", "phase1_3_submit",
+                  "phase1_3_update_hint", "phase1_3_confirm", "phase1_3_skip"):
+        phase = "phase1"
+
     if phase is None or phase == "auto":
         if not state:
             phase = "phase1"
@@ -2016,6 +2023,9 @@ def orchestrate(paper_name: str,
                 return {"ok": False, "error": "phase1_1_init 需要 input_type(docx 或 text)"}
             if not input_data:
                 return {"ok": False, "error": "phase1_1_init 需要 input_data(docx_path 或 outline_text)"}
+            # P0-1 修复：收到新开题报告时强制重置 state，确保从 Phase 1.1 开始
+            # 龙哥指令：直接重置，不需要确认
+            reset_orchestrate_state(paper_name)
             return orchestrate_phase1_1(paper_name, input_type, input_data, llm_func, docx_path)
         elif action == "phase1_confirm":
             return confirm_phase1(paper_name)

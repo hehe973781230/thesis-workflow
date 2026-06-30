@@ -137,3 +137,46 @@ def quick_search(query: str) -> str:
         return multi_search_text(query)
     except Exception:
         return f"[多工具检索不可用: {query}]"
+
+
+# ============================================================
+# P1-1 修复：可靠的 API Key 加载
+# ============================================================
+
+def load_minimax_api_key() -> str:
+    """
+    可靠加载 MiniMax API Key（方案 A:显式 source ~/.zshrc）
+
+    解决：subprocess 中 bash -c 'source ~/.zshrc' 不加载 zsh 特有配置的问题
+    龙哥的环境中 MINIMAX_API_KEY 写在 ~/.zshrc，用 bash -lc 才能可靠读取
+    """
+    import subprocess, os
+
+    # 方案 A: bash -lc 加载 zshrc（-l=login shell, -c=执行命令）
+    try:
+        result = subprocess.run(
+            ['bash', '-lc', 'printf "%s" "$MINIMAX_API_KEY"'],
+            capture_output=True, text=True, timeout=5
+        )
+        key = result.stdout.strip()
+        if key and len(key) > 10:
+            return key
+    except Exception:
+        pass
+
+    # 方案 B: 直接读 ~/.zshrc 文本（兜底）
+    try:
+        zshrc_path = os.path.expanduser('~/.zshrc')
+        with open(zshrc_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.strip().startswith('export MINIMAX_API_KEY='):
+                    # 提取引号内的值
+                    val = line.strip().split('=', 1)[1].strip()
+                    if val.startswith('"') and val.endswith('"'):
+                        return val[1:-1]
+                    elif val.startswith("'") and val.endswith("'"):
+                        return val[1:-1]
+    except Exception:
+        pass
+
+    return ''
