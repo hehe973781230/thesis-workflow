@@ -1433,12 +1433,25 @@ def extract_content_hints(
     # 背景: 之前只取"开题报告匹配段落"前 60 字作 hint，导致 70%+ 节点没 hint。
     #       Phase 2 写作时 LLM 靠"大纲骨架"勉强写，但容易跑题。
     # 修复: 调一次 LLM，输入所有空 hint 节点 (id + title)，输出 hint 字典。
+    # v2.x.x P0 hotfix: 从 docx_path 提取 paper_name，传递动态 paper_subject
+    _hint_paper_name = ""
+    if docx_path:
+        from pathlib import Path as _Path
+        _docx_path = _Path(docx_path)
+        for _parent in _docx_path.parents:
+            _parts = _parent.parts
+            if ".openclaw" in _parts and "workspace" in _parts:
+                _idx = _parts.index("workspace")
+                if _idx + 1 < len(_parts):
+                    _hint_paper_name = _parts[_idx + 1]
+                    break
     if llm_func:
         content_hints = _llm_fill_empty_hints(
             outline_tree=outline_tree,
             content_hints=content_hints,
             llm_func=llm_func,
             max_hint_chars=max_hint_chars,
+            paper_name=_hint_paper_name,
         )
 
     return content_hints
@@ -1449,6 +1462,7 @@ def _llm_fill_empty_hints(
     content_hints: Dict[str, str],
     llm_func: Callable[[str], str],
     max_hint_chars: int = 150,
+    paper_name: str = "",
 ) -> Dict[str, str]:
     """
     v2.x.x 新增: LLM 一次性兜底补全所有空 hint 节点。
@@ -1467,6 +1481,7 @@ def _llm_fill_empty_hints(
       content_hints: 已有的 content_hints 字典
       llm_func: LLM 调用函数
       max_hint_chars: 每个 hint 最大字符数，默认 150
+      paper_name: 论文项目名（用于提取 paper_subject；兑底使用）
 
     返回:
       更新后的 content_hints 字典
@@ -1499,17 +1514,33 @@ def _llm_fill_empty_hints(
         return content_hints  # 全部有 hint，无需兜底
 
     # 2. 构造 prompt
+    # v2.x.x P0 修复（v2.1.1-beta.10 硬编码 bug）: 论文主题改为动态提取
+    # 背景: 之前硬编码"A公司互联网分发业务竞争战略研究..."，导致所有 v2 用户的
+    #       _llm_fill_empty_hints 被错误引导为"终端厂商 + AI 大模型"主题
+    # 修复: 从 outline_tree.metadata.paper_title 提取，兑底用 paper_name
+    paper_subject = ""
+    try:
+        paper_subject = (
+            outline_tree.get("outline_tree", {}).get("metadata", {}).get("paper_title", "")
+            or ""
+        ).strip()
+    except Exception:
+        pass
+    if not paper_subject:
+        # 兑底：从 paper_name 去后缀
+        import re as _re_hint
+        paper_subject = _re_hint.sub(r'(_v\d+(?:\.\d+)*|_final|_\d{8}_\d{6})+$', '', paper_name or "").strip() or (paper_name or "本研究")
     nodes_text = "\n".join(
         f"- [{n['id']}] L{n['level']} {n['title']}"
         for n in empty_nodes
     )
-    prompt = f"""你是一名 MBA 论文写作助手。基于以下论文的节点列表，**一次性**为每个节点生成一段"写作方向提示"（content_hint），用于 Phase 2 写作时的上下文约束。
+    prompt = f"""你是一名学术论文写作助手。基于以下论文的节点列表，**一次性**为每个节点生成一段"写作方向提示"（content_hint），用于 Phase 2 写作时的上下文约束。
 
-论文主题：A公司互联网分发业务竞争战略研究（终端厂商互联网业务 + AI 大模型背景 + 集中化/差异化战略选择）
+论文主题：{paper_subject}
 
 要求：
 1. 每个 hint 30-80 字
-2. 紧扣节点标题，给出具体写作方向（理论框架、关键数据、案例、写作侧重点）
+2. 紧扣节点标题与论文主题，给出具体写作方向（理论框架、关键数据、案例、写作侧重点）
 3. 用学术、严谨语气，避免空泛话语
 4. 用 JSON 数组格式返回，每个元素包含 `id` 和 `hint` 两个字段
 
