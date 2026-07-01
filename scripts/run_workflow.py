@@ -790,27 +790,30 @@ def run_phase2(paper_name: str) -> bool:
 
         elif action == "pending_review":
             # HIL #4: 评审质量 medium/low
-            # v2.x.x 改进：HIL 暂停消息仅输出文件路径 + 一行摘要（详细评审文字见文件）
+            # v2.x.x 改进（v2.0.21-beta）：HIL 暂停消息改为人话版（摘要+路径+动作）
+            # 背景: 之前用 jq 命令对 MBA 学生门槛高
+            # 格式: 【节点ID 写完：质量X】\nAI 总结：...\n要细看：路径\n[1] 接受 / [2] 重写 / [3] 跳过
             quality = result.get("review_result", {}).get("quality")
             summary = result.get("review_result", {}).get("summary", "")
 
-            # 计算论文工作目录路径
+            # 计算论文工作目录路径（仅显示给用户看，不包含 jq 命令）
             from pathlib import Path as _Path
             _workspace = os.environ.get("THESIS_WORKSPACE", os.path.expanduser("~/.openclaw/workspace"))
             _paper_dir = _Path(_workspace) / paper_name
             _review_file = _paper_dir / "_phase2_review.json"
-            _outline_file = _paper_dir / "_outline_state.json"
 
-            print(f"\n⚠️ 节点 {next_node_id} 评审质量: {quality}")
+            print(f"\n【{next_node_id} 写完：质量{quality}】")
             if summary:
-                print(f"  摘要: {summary[:120]}")
-            print(f"\n📁 评审详情: cat {_review_file} | jq '.nodes.\"{next_node_id}\"'")
-            print(f"📁 节点内容: cat {_outline_file} | jq '.outline.outline_tree.nodes[] | select(.id==\"{next_node_id}\")'")
+                # 限制为一句话长度，避免刷屏
+                summary_short = summary.split("。")[0] + "。" if "。" in summary else summary[:100]
+                print(f"\nAI 总结：{summary_short}")
+            print(f"\n要细看：{_review_file}")
 
+            print()
             choice = hil_pause("4", f"节点 {next_node_id} 评审结果",
-                             {"1": "接受（标记 completed）",
-                              "2": "重写（再调一次 write_single_node）",
-                              "3": "跳过该节点"})
+                             {"1": "接受 → 继续",
+                              "2": "重写 → 让 AI 再写一遍",
+                              "3": "跳过 → 留空 phase 4 补"})
 
             if choice == "1":
                 # 接受：同步 outline state（reviewing → completed）+ orchestrate state

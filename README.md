@@ -67,6 +67,7 @@ openclaw skills install thesis-workflow-v2
 
 | 版本 | 亮点 |
 |------|------|
+| 2.0.21-beta | HIL #4 消息改为人话版：【节点X 写完：质量Y】 + AI 总结 + 路径 + 动作描述 |
 | 2.0.20-beta | 评审完整文字落盘 + HIL #4 消息简化为路径+选项（避免聊天刷屏）|
 | 2.0.19-beta | context_builder 主题锁定 + 反面警示 总是注入（修复 v8.0 ch1 跑题事故）|
 | 2.0.18-beta | outline_parser 新增 LLM 一次性兑底补全空 hint 节点 |

@@ -45,6 +45,7 @@ User → Phase 1 (Outline + Proposal) → Phase 2 (Node-by-Node Writing) → Pha
 
 | Version | Highlights |
 |---------|-----------|
+| 2.0.21-beta | HIL #4 message in human-friendly format: [Node X written: quality Y] + AI summary + path + action |
 | 2.0.20-beta | Review full text persisted + HIL #4 message simplified to file path + options |
 | 2.0.19-beta | context_builder: paper_subject_lock + no-runoff warning always injected (fix v8.0 ch1 topic drift) |
 | 2.0.18-beta | outline_parser: LLM one-shot fallback for empty content_hints |

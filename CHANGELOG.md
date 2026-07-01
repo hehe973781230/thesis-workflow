@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.21-beta] - 2026-07-01
+
+### Fixed
+
+- **P1 - HIL #4 消息还是太技术**：v2.0.20-beta 改用 jq 命令（如 `jq '.nodes."ch2"'`）对 MBA 学生门槛高。修复为人话版格式：
+
+  ```
+  【ch2 写完：质量中等】
+
+  AI 总结：这一节整体框架清晰，文献覆盖面较广，但跟 A 公司业务的呼应不够深。
+
+  要细看：/Users/.../v8.0/_phase2_review.json
+
+    [1] 接受 → 继续
+    [2] 重写 → 让 AI 再写一遍
+    [3] 跳过 → 留空 phase 4 补
+  ```
+
+### Technical
+
+- `run_workflow.py` HIL #4 输出重写：
+  - 移除 jq 命令
+  - 摘要限制为 1 句话
+  - 路径纯文本（可直接复制）
+  - 选项用箭头+动作描述
+
+### Impact
+
+- HIL 消息更易读：适合不熟悉命令行的用户
+- 摘要限制 1 句避免刷屏
+- 选项更清晰：人话动作描述
+
 ## [2.0.20-beta] - 2026-07-01
 
 ### Fixed
