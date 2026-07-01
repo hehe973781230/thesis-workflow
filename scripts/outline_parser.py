@@ -131,8 +131,17 @@ CH2_PATTERN = re.compile(r'^\s*(\d+)\.(\d+)\s*(\S.*)$')
 CH3_PATTERN = re.compile(r'^\s*(\d+)\.(\d+)\.(\d+)\s*(\S.*)$')
 
 # 大纲锚点(起始/终止)
-OUTLINE_START_ANCHORS = ["论文大纲", "目录", "目  录", "目 录"]
+OUTLINE_START_ANCHORS = ["论文大纲", "目录", "目  录", "目 录", "4.  论文大纲", "4.论文大纲", "4 论文大纲"]
 OUTLINE_END_ANCHOR = "参考文献"
+
+# v2.x.x C 路径: Word 自定义样式（南大 MBA 模板等）
+# 这些样式不属于 Word 内置 Heading 1/2/3，但用户用它们写论文标题
+# MinerU 不会识别，所以需要 python-docx 直接读
+CUSTOM_OUTLINE_STYLES = {
+    "l1": ("MBA-章标题", "Heading 1", "Title"),
+    "l2": ("MBA-一级节标题", "Heading 2"),
+    "l3": ("Heading 3",),
+}
 
 # 中文数字转换
 CHINESE_TO_INT = {
@@ -352,38 +361,115 @@ def extract_outline_from_docx_via_mineru(
         return extract_outline_from_text(md_text)
 
 
+def extract_outline_from_docx_with_custom_styles(docx_path: str) -> Tuple[List[Dict], List[Dict]]:
+    """
+    v2.x.x C 路径: 读取 Word 自定义样式 (如 MBA-章标题/MBA-一级节标题)
+    适用场景: 用户用 Word 自定义样式（非 Heading 1/2/3）写论文标题（如南大 MBA 模板）
+    优势: 不依赖 MinerU（避免隐私问题 + 速度问题），不依赖任何 heading 渲染
+    """
+    paragraphs = extract_text_from_docx(docx_path)
+
+    # 1. 找大纲区起点：用自定义 L1 样式 + 含"论文大纲"/"目录"的段
+    start_idx = None
+    for i, (_, style, text) in enumerate(paragraphs):
+        ts = text.strip()
+        if style in CUSTOM_OUTLINE_STYLES["l1"]:
+            for anchor in OUTLINE_START_ANCHORS:
+                if anchor in ts or ts.endswith(anchor) or ts.replace(" ", "") == anchor.replace(" ", ""):
+                    start_idx = i + 1
+                    break
+        if start_idx is not None:
+            break
+
+    if start_idx is None:
+        # 没找到自定义样式锚点 → 回退到 heuristic
+        return extract_outline_from_docx_with_heuristic(docx_path)
+
+    # 2. 找大纲区终点：含"参考文献"的段
+    end_idx = len(paragraphs)
+    for i in range(start_idx, len(paragraphs)):
+        _, style, text = paragraphs[i]
+        ts = text.strip()
+        if "参考文献" in ts and (style in CUSTOM_OUTLINE_STYLES["l1"] or style == "Normal" or style == "Title"):
+            end_idx = i
+            break
+
+    # 3. 收集大纲区内的章节行（L1 + L2/L3 节点）
+    #    关键发现：南大 MBA 模板中，"第1章 绪论" 等 L1 标题是 Normal 样式，
+    #    不是 MBA-章标题。所以 L1 需要靠文本模式（"第N章 XXX"）识别。
+    outline_lines = []
+    for i in range(start_idx, end_idx):
+        _, style, text = paragraphs[i]
+        ts = text.strip()
+        if not ts:
+            continue
+        # 优先级1: L2/L3 样式（南大 MBA-一级节标题 → L2/L3）
+        if style in CUSTOM_OUTLINE_STYLES["l2"] or style in CUSTOM_OUTLINE_STYLES["l3"]:
+            outline_lines.append(ts)
+            continue
+        # 优先级2: L1 标题段——但南大模板中 L1 是 Normal 样式，需靠文本模式识别
+        if re.match(r'^第[\d一二三四五六七八九十]+章', ts):
+            outline_lines.append(ts)
+            continue
+        # 优先级3: MBA-章标题（防其他模板用）
+        if style in CUSTOM_OUTLINE_STYLES["l1"] and not re.match(r'^第[\d一二三四五六七八九十]+章', ts):
+            # 避免被 OUTLINE_START_ANCHORS 错误加进去
+            continue
+
+    if not outline_lines:
+        return extract_outline_from_docx_with_heuristic(docx_path)
+
+    # 4. 用 _parse_outline_lines 解析
+    tree, issues = _parse_outline_lines(outline_lines)
+
+    # 5. L1 节点占位处理：开题报告通常没有"绪论"等章节标题
+    #    只有当 title 为空时才用 "第N章" 作占位
+    for ch in tree:
+        if ch.get("level") == 1:
+            if not ch.get("title", "").strip():
+                # 占位标题（仅当 title 为空时）
+                ch["title"] = f"第{ch['num']}章"
+                ch["_needs_llm_title"] = True
+            else:
+                ch["_needs_llm_title"] = False
+
+    return tree, issues
+
+
 def extract_outline_from_docx(docx_path: str) -> Tuple[List[Dict], List[Dict]]:
     """
     从 docx 文件解析目录
-    v2.0.7 统一入口: 根据模块级状态决策调用哪个路径。
-    降级语义(F1-F5 决策):
-      - F1=否: 不弹窗(用户静默)
-      - F2=是: 降级事件写 audit_log
-      - F3=1: MinerU 失败 1 次后立即降级
-      - F4=进程级: _fallback_used 是模块全局
-      - F5=共享: 跨 paper 共享 _fallback_used
-    单向降级: B (MinerU) → A (heuristic),A 失败不回 B。
+    v2.x.x 统一入口: 根据模块级状态决策调用哪个路径。
+    解析路径顺序: C (自定义样式) → B (MinerU) → A (heuristic)
+    v2.x.x 新增 C 路径: 修复 MinerU 不识别 Word 自定义样式的问题
     """
     global _fallback_used
 
-    # 情况 1: MinerU 不可用 → 直接 A
+    # 情况 1: 优先尝试 C 路径 (自定义样式)
+    try:
+        tree, issues = extract_outline_from_docx_with_custom_styles(docx_path)
+        if tree and len(tree) >= 5:
+            return tree, issues
+    except Exception as e:
+        # C 路径失败，继续尝试其他路径
+        pass
+
+    # 情况 2: MinerU 不可用 → 直接 A
     if not _is_mineru_available():
         return extract_outline_from_docx_with_heuristic(docx_path)
 
-    # 情况 2: 已降级过 → 直接 A(不回环,F5=共享)
+    # 情况 3: 已降级过 → 直接 A(不回环)
     if _fallback_used:
         return extract_outline_from_docx_with_heuristic(docx_path)
 
-    # 情况 3: 尝试 MinerU(B 路径,F3=1 次机会)
+    # 情况 4: 尝试 MinerU(B 路径)
     try:
         return extract_outline_from_docx_via_mineru(docx_path)
 
     except KeyboardInterrupt:
-        # 用户中断,不降级,不写 audit
         raise
 
     except Exception as e:
-        # 单向降级: B → A(F2=是 写 audit,F1=否 不弹窗,F4=进程级 标记 fallback_used)
         _fallback_used = True
         _log_fallback_to_audit(
             from_engine="mineru",

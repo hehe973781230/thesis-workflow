@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.17-beta] - 2026-07-01
+
+### Fixed
+
+- **P0 - 解析路径对 Word 自定义样式失效**：`outline_parser` 走 MinerU 路径时，docx 中的 Word 自定义样式（如南大 MBA 模板的 `MBA-章标题` / `MBA-一级节标题`）被降级为普通文本，结构信息丢失，导致 Phase 1.1 大纲解析严重错位。修复后 v8.0 解析从 13 个错位节点 → 55 个真实节点 + 7 虚拟 summary = 62 节点。
+- **路径顺序重构**：主入口 `extract_outline_from_docx` 的解析顺序从 B → A 改为 C → B → A，新增 C 路径优先于 MinerU。
+
+### Added
+
+- **C 路径：`extract_outline_from_docx_with_custom_styles`** (~60 行)
+  - 基于 `python-docx` 直接读 Word 段落 + 样式，不依赖 MinerU
+  - 避免 MinerU 的隐私风险（不上传 docx 到云端）+ 速度更快
+  - 通过 `CUSTOM_OUTLINE_STYLES` 配置项支持自定义样式名（默认含 `MBA-章标题` / `MBA-一级节标题` / `Heading 1/2/3`）
+  - 大纲区起点：自定义 L1 样式 + 含"论文大纲"/"目录"等锚点词
+  - 大纲区终点：含"参考文献"的段落
+  - 章节行收集：L2/L3 样式（`MBA-一级节标题`）+ 文本模式 `^第N章`（L1 用 Normal 样式兜底）
+
+### Technical
+
+- `outline_parser.py` 新增常量：`CUSTOM_OUTLINE_STYLES`（dict of style tuples）
+- `OUTLINE_START_ANCHORS` 扩展：增加 "4.  论文大纲" 等带编号前缀的锚点
+- 主入口 `extract_outline_from_docx` 路径顺序：C → B → A（v2.0.7 文档同步更新）
+
+### Impact
+
+- **南大 MBA 论文模板**（`MBA-章标题` + `MBA-一级节标题`）：从完全无法解析 → 62 节点全对
+- 其他使用 Word 自定义样式（非 Heading 1/2/3）的论文模板均受益
+- 现有用户（v1 模板 / Heading 1/2/3 用户）行为不变（C 路径找不到锚点会降级到 B 路径）
+
 ## [2.0.16-beta] - 2026-06-28
 
 ### Fixed
