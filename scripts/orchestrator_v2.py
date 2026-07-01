@@ -30,7 +30,7 @@ from node_writer import write_node_with_llm, extract_key_conclusion
 from reviewer import review_node
 from state_manager_v2 import (
     outline_load, outline_save, outline_update_status, outline_get_node, outline_get_context,
-    WORKSPACE, _get_paper_dir, _get_outline_nodes
+    WORKSPACE, _get_paper_dir, _get_outline_nodes, _set_outline_nodes
 )
 from outline_parser import (
     insert_chapter_summary_nodes,
