@@ -389,12 +389,18 @@ def build_prompt_package(paper_name: str, node_id: str) -> Dict[str, Any]:
     # 增强项4: content_hint 字段（从 outline_state 节点字段读取，开题报告提取或用户手写）
     content_hint = current.get("content_hint", "").strip()
 
-    # v2.x.x 新增（v7.0 跑题事故修复）：当 content_hint 为空时，注入大纲骨架 + 反面警示
-    if not content_hint and state:
-        outline_skeleton = _build_outline_skeleton(state, node_id)
+    # v2.x.x 修复（v8.0 ch1 跑题事故）：主题锁定 + 反面警示 改为总是注入
+    # 背景: v2.0.7 B-2 只在 content_hint 空时注入，但 hint 有内容时 LLM 也会跑题
+    #       （v8.0 ch1 实际案例：手补的 hint 有内容，但 LLM 写了通用 MBA 论文）
+    # 修复: 无论 hint 是否为空，都生成 paper_subject_lock 字段供 prompt 使用
+    #       当 hint 空时，叠加 outline_skeleton（保留 v2.0.7 B-2 行为）
+    paper_subject_lock = ""
+    if state:
         paper_subject = _extract_paper_subject(paper_name, state)
-        warning_block = _build_no_runoff_warning(paper_subject)
-        content_hint = f"{warning_block}\n\n{outline_skeleton}"
+        paper_subject_lock = _build_no_runoff_warning(paper_subject)
+        if not content_hint:
+            outline_skeleton = _build_outline_skeleton(state, node_id)
+            content_hint = f"{paper_subject_lock}\n\n{outline_skeleton}"
 
     package = {
         "ok": True,
@@ -410,6 +416,7 @@ def build_prompt_package(paper_name: str, node_id: str) -> Dict[str, Any]:
         "required_topics": required_topics,
         "ending_hint": ending_hint,  # 可能为 null
         "content_hint": content_hint,  # 增强项4: 开题报告提取或用户手写
+        "paper_subject_lock": paper_subject_lock,  # v2.x.x 新增：主题锁定 + 反面警示（总是生效）
         "search_context": search_context,  # v2.0.9 多工具检索补充
         "word_count_min": word_range["min"],
         "word_count_max": word_range["max"],
@@ -440,6 +447,12 @@ def build_prompt_package_text(package: Dict) -> str:
     
     parts.append(f"\n## 写作指令\n")
     parts.append(f"{package['writing_instruction']}\n")
+
+    # v2.x.x 新增：主题锁定 + 反面警示（v8.0 ch1 跑题事故修复）
+    # 总是注入（不管 hint 是否为空），防止 LLM 写通用 MBA 论文
+    if package.get('paper_subject_lock'):
+        parts.append(f"\n## ⚠️ 主题锁定（必读）\n")
+        parts.append(f"{package['paper_subject_lock']}\n")
     
     if package.get('bridge_paragraph'):
         parts.append(f"\n## 承接上文\n")

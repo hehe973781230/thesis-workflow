@@ -67,6 +67,7 @@ openclaw skills install thesis-workflow-v2
 
 | 版本 | 亮点 |
 |------|------|
+| 2.0.19-beta | context_builder 主题锁定 + 反面警示 总是注入（修复 v8.0 ch1 跑题事故）|
 | 2.0.18-beta | outline_parser 新增 LLM 一次性兑底补全空 hint 节点 |
 | 2.0.17-beta | outline_parser 新增 C 路径：Word 自定义样式（MPA-章标题/一级节标题）支持 |
 | 2.0.12-beta | Phase 3.5 大纲锚定章节拆分（替代硬编码正则）+ P0/P1 修复（F1-F6）|

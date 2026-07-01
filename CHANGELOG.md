@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.19-beta] - 2026-07-01
+
+### Fixed
+
+- **P0 - 修复 v8.0 ch1 跑题事故**：`context_builder.build_prompt_package()` 原 v2.0.7 B-2 机制只在 `content_hint` 为空时注入"主题锁定 + 反面警示"。但 hint 有内容（但质量差）时 LLM 仍会跑题（v8.0 ch1 实测：手补的 hint + v2.0.7 B-2 都未能防止 LLM 写成"数字经济企业战略"通用 MBA 论文）。
+- 修复方案：主题锁定 + 反面警示 改为**总是注入**（`paper_subject_lock` 字段独立）。
+- prompt 顺序优化：主题锁定放在"## ⚠️ 主题锁定（必读）" 位置，位于"## 写作指令" 之后、"## 开题报告方向参考" 之前，高位约束 LLM。
+
+### Technical
+
+- `context_builder.py`:
+  - `build_prompt_package()` 新增 `paper_subject_lock` 字段
+  - 触发条件：`if state`（总是计算，不再仅 `if not content_hint`）
+  - `build_prompt_package_text()` 新增"## ⚠️ 主题锁定（必读）" section
+- B-2 行为向后兼容：`if not content_hint` 时仍叠加 outline_skeleton
+
+### Impact
+
+- 修复 Phase 2 写作 LLM 跑题为通用 MBA 论文的 P0 问题
+- 适用于所有节点、所有论文主题（不只 MBA 模板）
+- 与 v2.0.18-beta LLM 兑底补全 hint 叠加使用，效果最佳
+
 ## [2.0.18-beta] - 2026-07-01
 
 ### Added
