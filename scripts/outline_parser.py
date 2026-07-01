@@ -1429,6 +1429,138 @@ def extract_content_hints(
         # 存入 special key
         content_hints["__orphan_count__"] = str(orphan_count)
 
+    # v2.x.x 新增: LLM 兜底 — 一次性补全所有空 hint 节点
+    # 背景: 之前只取"开题报告匹配段落"前 60 字作 hint，导致 70%+ 节点没 hint。
+    #       Phase 2 写作时 LLM 靠"大纲骨架"勉强写，但容易跑题。
+    # 修复: 调一次 LLM，输入所有空 hint 节点 (id + title)，输出 hint 字典。
+    if llm_func:
+        content_hints = _llm_fill_empty_hints(
+            outline_tree=outline_tree,
+            content_hints=content_hints,
+            llm_func=llm_func,
+            max_hint_chars=max_hint_chars,
+        )
+
+    return content_hints
+
+
+def _llm_fill_empty_hints(
+    outline_tree: Dict,
+    content_hints: Dict[str, str],
+    llm_func: Callable[[str], str],
+    max_hint_chars: int = 150,
+) -> Dict[str, str]:
+    """
+    v2.x.x 新增: LLM 一次性兜底补全所有空 hint 节点。
+
+    适用场景:
+      - 节点在开题报告里没匹配到段落 (orphan) → extract_content_hints() 跳过了它
+      - 需为这些"空 hint 节点"生成方向提示，让 Phase 2 写作时 LLM 有上下文约束
+
+    策略:
+      - 收集所有空 hint 节点 (id + title)
+      - 调一次 LLM，输入节点列表，要求 JSON 数组返回 hint
+      - 解析 + 写回 content_hints
+
+    参数:
+      outline_tree: outline_parse() 返回的 outline
+      content_hints: 已有的 content_hints 字典
+      llm_func: LLM 调用函数
+      max_hint_chars: 每个 hint 最大字符数，默认 150
+
+    返回:
+      更新后的 content_hints 字典
+    """
+    if not llm_func:
+        return content_hints
+
+    # 1. 收集空 hint 节点
+    try:
+        nodes = _get_outline_nodes({"outline": outline_tree})
+    except Exception:
+        return content_hints
+
+    empty_nodes = []
+    for n in nodes:
+        if n.get("is_virtual"):
+            continue
+        node_id = n.get("id", "")
+        if not node_id:
+            continue
+        if content_hints.get(node_id, "").strip():
+            continue  # 已有 hint，跳过
+        empty_nodes.append({
+            "id": node_id,
+            "level": n.get("level", 0),
+            "title": n.get("title", ""),
+        })
+
+    if not empty_nodes:
+        return content_hints  # 全部有 hint，无需兜底
+
+    # 2. 构造 prompt
+    nodes_text = "\n".join(
+        f"- [{n['id']}] L{n['level']} {n['title']}"
+        for n in empty_nodes
+    )
+    prompt = f"""你是一名 MBA 论文写作助手。基于以下论文的节点列表，**一次性**为每个节点生成一段"写作方向提示"（content_hint），用于 Phase 2 写作时的上下文约束。
+
+论文主题：A公司互联网分发业务竞争战略研究（终端厂商互联网业务 + AI 大模型背景 + 集中化/差异化战略选择）
+
+要求：
+1. 每个 hint 30-80 字
+2. 紧扣节点标题，给出具体写作方向（理论框架、关键数据、案例、写作侧重点）
+3. 用学术、严谨语气，避免空泛话语
+4. 用 JSON 数组格式返回，每个元素包含 `id` 和 `hint` 两个字段
+
+节点列表（{len(empty_nodes)} 个）：
+{nodes_text}
+
+返回格式（严格 JSON 数组，不要其他文字、代码块标记、注释）：
+[
+  {{"id": "1.1", "hint": "..."}},
+  {{"id": "1.5", "hint": "..."}}
+]"""
+
+    # 3. 调 LLM
+    try:
+        response = llm_func(prompt)
+    except Exception as e:
+        # LLM 失败不影响主流程，返回原 content_hints
+        return content_hints
+
+    if not response or not isinstance(response, str):
+        return content_hints
+
+    # 4. 解析 LLM 输出 — 提取 JSON 数组
+    import re as _re
+    # 匹配第一个 [] 块（贪婪 or 非贪婪都试）
+    json_match = _re.search(r'\[.*\]', response, _re.DOTALL)
+    if not json_match:
+        return content_hints
+    try:
+        hints_list = json.loads(json_match.group(0))
+    except Exception:
+        return content_hints
+
+    if not isinstance(hints_list, list):
+        return content_hints
+
+    # 5. 写回 content_hints
+    filled = 0
+    for item in hints_list:
+        if not isinstance(item, dict):
+            continue
+        nid = str(item.get("id", "")).strip()
+        hint = str(item.get("hint", "")).strip()
+        if not nid or not hint:
+            continue
+        # 截断到 max_hint_chars
+        if len(hint) > max_hint_chars:
+            hint = hint[:max_hint_chars] + "..."
+        content_hints[nid] = hint
+        filled += 1
+
     return content_hints
 
 

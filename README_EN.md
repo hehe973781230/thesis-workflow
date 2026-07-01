@@ -45,6 +45,7 @@ User → Phase 1 (Outline + Proposal) → Phase 2 (Node-by-Node Writing) → Pha
 
 | Version | Highlights |
 |---------|-----------|
+| 2.0.18-beta | outline_parser: LLM one-shot fallback for empty content_hints |
 | 2.0.17-beta | outline_parser: new path C for Word custom styles (MBA templates) |
 | 2.0.12-beta | Phase 3.5 outline-anchored chapter split + P0/P1 fixes (F1-F6) |
 | 2.0.11-beta | Removed v1 remnants + clawhubignore |

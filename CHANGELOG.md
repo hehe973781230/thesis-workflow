@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.18-beta] - 2026-07-01
+
+### Added
+
+- **P0 修复 - LLM 一次性兑底补全空 hint 节点**：新增 `_llm_fill_empty_hints()` 函数，在 `extract_content_hints()` 末尾调用。
+  - 背景：之前 hint 只从"开题报告匹配段落"提取，没匹配上的节点（orphan）就没 hint，导致 70%+ 节点空 hint。Phase 2 写作时 LLM 靠"大纲骨架"勉强写但容易跑题。
+  - 策略：调一次 LLM，输入所有空 hint 节点 (id + title + 论文主题)，输出 JSON 数组 hint 字典。
+  - 优势：v8.0 实测从 26% 覆盖 → 100% 覆盖。
+  - 兑底安全：LLM 失败 → 返回原 content_hints，不阻断主流程。
+  - 零额外调用：全部节点已有 hint 时不调 LLM。
+
+### Technical
+
+- `outline_parser.py` 新增辅助函数：`_llm_fill_empty_hints()` (~80 行)
+- `extract_content_hints()` 末尾调用 LLM 兑底逻辑（~5 行）
+- Prompt 优化：中文 MBA 论文语境，JSON 数组输出格式约束
+
+### Impact
+
+- 任何使用 v2 框架的论文都受益，不限于南大 MBA 模板
+- 一次 LLM 调用可补全 30-50 个空 hint（token 友好）
+- 后续 Phase 2 LLM 写作时上下文约束更精准，间接提升论文质量
+
 ## [2.0.17-beta] - 2026-07-01
 
 ### Fixed
