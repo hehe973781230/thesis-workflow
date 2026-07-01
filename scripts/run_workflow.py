@@ -557,8 +557,8 @@ def run_phase1(paper_name: str) -> bool:
         node_count = len(r.get("outline", {}).get("outline_tree", {}).get("nodes", []))
         print(f"✅ Phase 1.1 完成: 解析 {node_count} 个节点")
 
-    if r.get("hil_message"):
-        print(f"\n{r['hil_message']}")
+        if r.get("hil_message"):
+            print(f"\n{r['hil_message']}")
 
     # HIL #1: 大纲确认
     outline = outline_load(paper_name)
@@ -623,6 +623,8 @@ def run_phase1(paper_name: str) -> bool:
         if r.get("hil_message"):
             print(f"\n{r['hil_message']}")
         print(f"✅ Phase 1.3 submit 完成")
+        # 重新加载 state（orchestrate 写入了新 state）
+        state = load_orchestrate_state(paper_name)
 
     # 显示归因结果（章节 → 研究问题映射表）
     p13_result = state.get("phase1_3_result", {})
