@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.20-beta] - 2026-07-01
+
+### Fixed
+
+- **P1 - HIL #4 消息刷屏**：`run_workflow.py` 原本在 HIL #4 暂停时打印完整的评审问题/建议（5+ 条），导致微信群里被长文本刷屏。改为：仅 1 行摘要 + 文件路径 + jq 查询命令 + 选项。
+- **P1 - 评审详情落盘**：`orchestrator_v2.py` 之前只写评审元数据（status/quality/word_count/action）到 `_phase2_review.json`，详细文字（summary/strengths/weaknesses/suggestions）只在内存对象。修复后评审完整文字落盘，用户可查文件深看。
+
+### Technical
+
+- `orchestrator_v2.py` 在 `append_node_review` 调用时增加 5 个字段：
+  - `summary` (文字)
+  - `strengths` (list)
+  - `weaknesses` (list)
+  - `suggestions` (list)
+  - `review_layer` (ai/program)
+- `run_workflow.py` HIL #4 消息输出格式：
+  - 移除 5+ 行的完整问题/建议打印
+  - 改为 1 行摘要 + 📁 路径 + jq 命令 + 选项
+  - 仅 5 行 vs 之前 20+ 行
+
+### Impact
+
+- HIL #4 微信消息从 20+ 行 → 5 行，节省聊天刷屏
+- 评审详情可深看（jq 查询 _phase2_review.json）
+- 与 v2.0.19-beta 主题锁定叠加，Phase 2 写作流程更顺畅
+- 适合远程监督（用户不用看长消息，直接打开文件看详情）
+
 ## [2.0.19-beta] - 2026-07-01
 
 ### Fixed

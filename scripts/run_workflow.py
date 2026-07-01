@@ -790,18 +790,22 @@ def run_phase2(paper_name: str) -> bool:
 
         elif action == "pending_review":
             # HIL #4: 评审质量 medium/low
+            # v2.x.x 改进：HIL 暂停消息仅输出文件路径 + 一行摘要（详细评审文字见文件）
             quality = result.get("review_result", {}).get("quality")
             summary = result.get("review_result", {}).get("summary", "")
-            weaknesses = result.get("review_result", {}).get("weaknesses", [])
-            suggestions = result.get("review_result", {}).get("suggestions", [])
+
+            # 计算论文工作目录路径
+            from pathlib import Path as _Path
+            _workspace = os.environ.get("THESIS_WORKSPACE", os.path.expanduser("~/.openclaw/workspace"))
+            _paper_dir = _Path(_workspace) / paper_name
+            _review_file = _paper_dir / "_phase2_review.json"
+            _outline_file = _paper_dir / "_outline_state.json"
 
             print(f"\n⚠️ 节点 {next_node_id} 评审质量: {quality}")
             if summary:
-                print(f"  总结: {summary[:200]}")
-            if weaknesses:
-                print(f"  问题: {weaknesses}")
-            if suggestions:
-                print(f"  建议: {suggestions}")
+                print(f"  摘要: {summary[:120]}")
+            print(f"\n📁 评审详情: cat {_review_file} | jq '.nodes.\"{next_node_id}\"'")
+            print(f"📁 节点内容: cat {_outline_file} | jq '.outline.outline_tree.nodes[] | select(.id==\"{next_node_id}\")'")
 
             choice = hil_pause("4", f"节点 {next_node_id} 评审结果",
                              {"1": "接受（标记 completed）",

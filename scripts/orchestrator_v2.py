@@ -1054,6 +1054,9 @@ def write_single_node(paper_name: str, node_id: str,
         action = "pending_review"
 
     # PhaseManager:记录节点写作状态（追加写入，不覆盖）
+    # v2.x.x 新增：评审详细文字（summary/strengths/weaknesses/suggestions）落盘
+    # 背景：之前只存元数据，用户看评审需要看聊天记录
+    # 修复：评审完整内容入 _phase2_review.json，便于 HIL 暂停时查文件路径
     try:
         pm = _get_pm(paper_name)
         pm.append_node_review(
@@ -1064,6 +1067,12 @@ def write_single_node(paper_name: str, node_id: str,
                 "quality": review_result.get("quality", "unknown"),
                 "word_count": word_count,
                 "action": action,
+                # v2.x.x 新增：评审详细文字落盘
+                "summary": review_result.get("summary", ""),
+                "strengths": review_result.get("strengths", []),
+                "weaknesses": review_result.get("weaknesses", []),
+                "suggestions": review_result.get("suggestions", []),
+                "review_layer": review_result.get("layer", "ai"),
             },
         )
     except Exception:
