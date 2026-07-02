@@ -47,7 +47,7 @@ openclaw skills install thesis-workflow-v2
 - **9 个 HIL 节点**：human-in-the-loop 检查点，关键决策不跳过
 - **Guardrails 自检**：10 项自动化规范检查（章节完整性/字数/引用/表格格式等）
 - **Loop 架构**：Orchestrator Loop / 内部自检 Loop / 审核 Loop / Verification Loop
-- **Phase 5 Word输出**：md2docx_strict.py 合规脚本（三线表/分页/字体/行距）
+- **Phase 5 Word输出**：[thesis-docx-export](../thesis-docx-export/SKILL.md) skill（独立子 skill，三线表/分页/字体/行距）
 
 ## 适用场景TODO_SPLIT
 
@@ -119,8 +119,7 @@ openclaw skills install thesis-workflow-v2
 - OpenClaw subagent (sessions_spawn)
 - BGE-small-zh 中文向量模型（Layer 2 标题匹配）
 - Tavily / arXiv / OpenAlex 多工具并行检索
-- md2docx_strict.py（Word 合规转换）
-- Guardrails loop_self_check.py（10 项自动化校验）
+- **Word 输出**：见 [thesis-docx-export](../thesis-docx-export/SKILL.md) 独立 skill
 
 ## License
 

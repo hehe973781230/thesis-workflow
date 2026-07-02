@@ -1,0 +1,1 @@
+../../scripts/md2docx_strict.py

@@ -1,7 +1,9 @@
 ---
 name: thesis-workflow-v2
-description: "v2 新框架（beta）：Phase 3.5/4/5 + BGE向量匹配 + multi-search。v2 重构为 outline-anchored 设计 + 9 HIL 节点 + 真实 CLI 入口。⚠️ 测试版，需独立安装（不覆盖 v1）。"
+description: "Write, review, and export MBA / academic theses end-to-end as Word / DOCX. Covers outline planning → node-by-node writing → chapter review → academic deep review → Word export with GB/T 7714 references and 南大-style formatting. Triggers: 论文 / thesis / dissertation / 答辩 / 开题 / MBA / 章节 / 文献综述 / 参考文献 / chapter outline. ⚠️ v2 is beta (outline-anchored + 9 HIL + BGE multi-search); install independently and do not overwrite v1. Prefer v1 (`thesis-workflow`) for production unless user explicitly asks for v2 / 新框架 / outline-anchored / 9 HIL."
+platforms: [linux, macos, windows]
 metadata:
+  # ↓ OpenClaw 私有配置（仅 ClawHub 加载器识别；不影响标准 platforms 字段）
   clawdbot:
     emoji: "📝"
     version: "2.1.1-beta.11"   # 单一真实来源，发布前必须先改这里。发布规则见 scripts/release.py
@@ -13,6 +15,20 @@ metadata:
 
 > 完整文档见：`references/checklist.md`（学术规范清单）、`references/loop-design.md`（Loop 设计原理）
 
+## 🔌 平台依赖（加载后必看）
+
+本 skill **不是**通用 Hermes skill，专为 OpenClaw 设计。在调用本 skill 任何 Python 入口前，先确认平台依赖：
+
+| 维度              | 依赖项                                                                 |
+|-------------------|------------------------------------------------------------------------|
+| **Agent 启动**    | `sessions_spawn`（OpenClaw 子 agent 机制）                            |
+| **状态文件目录**  | `~/.openclaw/workspace/{paper_name}/`（**非** Hermes 标准路径）         |
+| **工具后端**      | `web_search` / `tavily_search` / `arxiv_search`（OpenClaw MCP 工具链） |
+| **CLI 入口**      | `python3 scripts/run_workflow.py {paper_name} --phase auto`           |
+| **Python 路径**   | `PYTHONPATH=scripts python3 ...`（CLI 内部期望 scripts 在 path 上）    |
+
+**反模式：** 不要把本 skill 当作标准 Hermes skill 调用——Hermes 的 file / search / web 工具链不能驱动 v2 的状态机和 HIL 拦截。如果你需要把论文流程迁回 Hermes，先做"状态层适配"（用 Hermes 的 workspace 概念替代 `~/.openclaw/workspace/`，并把 `sessions_spawn` 改成 Hermes 的子任务机制），再启用本 skill。
+
 ## ⚠️ 触发规则
 
 当用户请求生成 Word 文档且满足以下任一条件时，**必须**调用本 skill 的 Word 输出流程，不得使用简单 md2docx 脚本：
@@ -21,6 +37,49 @@ metadata:
 - 用户明确要求导出 `.docx` 格式且文件性质为学术论文
 
 **正确流程：** 写作语法预检 → Review Agent 终审（`scripts/loop_self_check.py` 校验通过）→ `scripts/md2docx_strict.py` 合规转换 → Word 输出
+
+## ⚠️ v1 / v2 选择矩阵（加载后必看）
+
+v2 仍处于 beta，**生产论文默认走 v1**。仅当用户明确要求时再切 v2：
+
+| 场景 | 选择 | 触发依据 |
+|------|------|---------|
+| 用户说「稳一点 / 跑过答辩 / 已用 v1 / 默认」 | ✅ v1 (`thesis-workflow`) | 默认基线 |
+| 论文已在 `~/.openclaw/workspace/{paper}/` 下运行 v1 | ❌ 切 v2 | 状态文件不兼容 |
+| 用户说「用 v2 / 新框架 / outline-anchored / 9 HIL / BGE 多工具并行」 | ✅ 本 skill (v2) | 显式升级 |
+| 用户未明示 + 新论文 | ⚠️ 走 v1 | 避开 beta 风险 |
+
+**反模式：** 不要因为「本 skill 描述更新」就把现有 v1 论文切到 v2——v2 的 `_orchestrate_state.json` schema 与 v1 不兼容。
+
+### v2 HIL 节点一览（确定用 v2 之后再读）
+
+v2 在 9 个位置**强制 human-in-the-loop**：每到这些点状态机会 hard pause，必须用户确认才能推进。如果 agent 想绕过任何一项，v2.0.6 的拦截规则会拒绝（见 §v2.0.6 拦截规则）：
+
+| #  | 触发位置                       | 检查内容           | 决策              |
+|----|--------------------------------|--------------------|-------------------|
+| 1  | Phase 1.1 后                  | 大纲结构           | 接受 / 修改        |
+| 2  | Phase 1.3 后                  | 归因结果           | 接受 / 调整 hint   |
+| 3  | 在 `write_single_node()` 写入单节点前 | info_scarcity      | 提供 hint / AI 生成 / 跳过 |
+| 4  | Phase 2 评审后                | quality=medium/low | 接受 / 重写        |
+| 5  | Phase 2 完成后                | 章节内容预览       | 通过 / 修改        |
+| 6  | Phase 3 整合后                | 整合版内容         | 通过 / 修改反馈    |
+| 7  | Phase 3.5 P0 修复             | 超 3 轮未收敛      | 接受 / 继续修订    |
+| 8  | Phase 4 整合方案              | 方案是否接受       | 接受 / 修改        |
+| 9  | Phase 5.2 后                  | Word 输出          | 导出 / 修改        |
+
+**反模式：** 不要给 agent 传 `allow_skip_hil=True` 或在 prompt 里写"自动通过所有 HIL"——HIL 是论文质量最后一道防线，绕过它的代价是错版交付给导师。
+
+### v2.0.6 拦截规则（与 HIL 表配套必读）
+
+如果 agent 想绕过 HIL 或绕过"独立评审"，v2.0.6 在 orchestrator 层有 3 类硬拦截：
+
+| 拦截点 | 强制规则 | 失败场景 |
+|--------|----------|----------|
+| **拍板 #1 强制** | `phase1_3_skip` 不允许；`skip_phase1_3()` 需要 `MBA_THESIS_PRODUCTION=1` + 必填 `reason`/`operator` + audit log | 跳过 Phase 1.3 → 论文方向错位无人工把关，全文跑偏 |
+| **B-2 幂等保护** | `outline_update_status()` 默认拒绝覆盖已 completed 节点 | 误重写已通过审核的节点 → 评审历史回滚，质量倒退 |
+| **独立 Reviewer** | `write_single_node()` 默认要求 `reviewer_func ≠ llm_func` | 生成+评审用同一 LLM → 自我审核，"我写的都对"假阳性 |
+
+**反模式：** 不要在 prompt 里"建议 agent 用 force=True 绕过"或"把 allow_skip_hil 设为 True"——v2.0.6 的拦截规则会拒绝并返回错误。绕过拦截的代价比"卡在 HIL 等用户确认"高得多。
 
 ## 核心架构
 
@@ -99,6 +158,8 @@ ctx = research_enrich(node_id, paper_name)
 
 ### Phase 1：规划与定稿
 
+**🔴 红线：** Phase 1.1 / 1.3 **禁止**直接调用 Python API，必须经 `run_workflow.py`（详见 §A.6）。直接 `import orchestrator_v2` 在 Phase 1 阶段会绕过用户 HIL 确认，论文签收前的方向错误会全白做。
+
 通过问答输出确认清单，用户逐项确认后方可动笔。
 
 **红色星标项（必填）：**
@@ -111,6 +172,11 @@ ctx = research_enrich(node_id, paper_name)
 ### Phase 2：逐节点写作
 
 **前置检查：** Phase 1 必填项已确认
+
+**🔴 红线：**
+- ❌ 跳过 `run_workflow.py` 直接读写 `_orchestrate_state.json`（必须经 CLI 入口）→ 失败场景：CLI 内部维护"状态机锁 + phase 推进历史 + audit log"，直接读写会绕过锁，导致下一 Phase 跳号或死锁
+- ❌ 手工修改状态文件的 `phase*_status` 字段（会破坏 Orchestrator Loop 的下一阶段判断）
+- ❌ 长任务不汇报进度（必须按 25% / 50% / 75% / 100% 节点主动汇报，含 `completed_nodes` 数）→ 失败场景：Phase 2 写作耗时 20+ 分钟无汇报，用户以为 session 卡死会主动打断，导致已写 30 节点的章节全部丢失、状态半成品
 
 Orchestrator 遍历 outline 树中的每个节点，调用 `write_single_node()` 逐个生成内容。
 每个节点写作前通过 `context_builder.py` 构建 prompt 包，自动注入：
@@ -148,9 +214,14 @@ Integrator 汇总 Phase 3 + Phase 3.5 全部评审结果，制定整合方案。
 
 - Phase 5：Reviewer 终审
 - Phase 5.1：[可选] `humanize-chinese` skill 去AI味
-- Phase 5.2：`python3 scripts/md2docx_strict.py` 生成 Word 文档
+- Phase 5.2：**调用 `thesis-docx-export` skill**（Word 转换 + 10 项 Guardrails 校验）
 
 ## Orchestrator 生命周期管理
+
+**🔴 红线：** Phase 1 / 5.x **必须**经 `run_workflow.py` 入口；Phase 2-4 才允许 `import orchestrator_v2` 直接调 Python API（且仅在已通过 run_workflow 进入论文状态之后）。
+- ❌ 跳过 `run_workflow.py` 直接 `from orchestrator_v2 import orchestrate` → 失败场景：CLI 内部维护"状态机锁 + phase 推进历史 + audit log"，直接 import 绕过锁，导致下一 Phase 跳号或死锁
+- ❌ Phase 1 任何子阶段（1.1 / 1.2 / 1.3）直接 import orchestrator_v2 调 `phase1_*` → 失败场景：绕过用户在 Phase 1.1 / 1.3 末尾的 HIL 签收，论文方向错位无人工把关
+- ❌ 把 `force=True` / `allow_skip_hil=True` 作为 prompt 默认值 → 失败场景：v2.0.6 拦截规则会拒绝并抛错；agent 越权操作进退两难
 
 ### 真实入口（v2.0.6 新增）
 
@@ -210,30 +281,11 @@ print(r.get("message", ""))
 
 ### HIL 节点（v2.0.6 完整 9 个）
 
-| # | 触发位置 | 检查内容 | 决策 |
-|---|---------|---------|------|
-| 1 | Phase 1.1 后 | 大纲结构 | 接受 / 修改 |
-| 2 | Phase 1.3 后 | 归因结果 | 接受 / 调整 hint |
-| 3 | 在 write_single_node() 写入单节点前 | info_scarcity | 提供 hint / AI 生成 / 跳过 |
-| 4 | Phase 2 评审后 | quality=medium/low | 接受 / 重写 |
-| 5 | Phase 2 完成后 | 章节内容预览 | 通过 / 修改 |
-| 6 | Phase 3 整合后 | 整合版内容 | 通过 / 修改反馈 |
-| 7 | Phase 3.5 P0 修复 | 超 3 轮未收敛 | 接受 / 继续修订 |
-| 8 | Phase 4 整合方案 | 方案是否接受 | 接受 / 修改 |
-| 9 | Phase 5.2 后 | Word 输出 | 导出 / 修改 |
+> 9 个 HIL 节点的速查表已前移到 `## 核心架构` 之前（紧跟 v1/v2 选择矩阵后）。在 §"v2 HIL 节点一览"查看完整表。
 
 ### v2.0.6 拦截规则（enforcement）
 
-- **拍板 #1 强制**：Phase 1.3 不允许跳过
-  - `orchestrate(action="phase1_3_skip")` → 拦截，返回 `拍板 #1 强制不允许跳过`
-  - `skip_phase1_3()` 函数体加 `MBA_THESIS_PRODUCTION=1` env guard + 必填 `reason`/`operator` + audit log
-- **B-2 幂等保护**：`outline_update_status()` 默认拒绝覆盖已 completed 节点的内容
-  - 需重写请调 `write_single_node(bypass_scarcity=True)` 重走标准流程
-  - 或显式传 `force=True`（调试用）
-- **独立 Reviewer**：`write_single_node()` 接受 `reviewer_func` 参数
-  - 防止生成和评审使用同一 LLM（自我审核）
-  - 默认 reviewer_func == llm_func 时发警告
-  - 调试场景可显式 `allow_self_review=True`
+> v2.0.6 拦截规则段（拍板 #1 / B-2 幂等 / 独立 Reviewer）已前移到 `## 核心架构` 之前（紧跟 9 个 HIL 节点表后）。在 §"v2.0.6 拦截规则"查看完整表。
 
 ### 审核 Loop 自动重审
 
@@ -251,18 +303,9 @@ python3 scripts/orchestrator.py 状态文件.json --validate
 
 ## ⚠️ Loop 设计原则
 
-> 详细原理见 `references/loop-design.md`
+5 个 Loop 元素的详细定义、终止条件、HIL 检查点对照、与 OpenClaw Agent Loop 的差异比较：详见 `references/loop-design.md`（302 行）。
 
-| Loop 元素 | 作用 | 终止条件 |
-|----------|------|---------|
-| **Orchestrator Loop** | 每 Phase 完成后自动判断下一步 | 全部 7 Phase 完成 |
-| **Phase 内部自检 Loop** | Observe → Think → Act → Verify 四步 | Guardrails 100% 通过 |
-| **审核 Loop** | 审→改→重审→连续2轮无新P0→通过 | 连续 2 轮无新 P0/P1 |
-| **Guardrails 校验** | `scripts/loop_self_check.py` 10项自动化检查 | 全部通过 |
-| **Verification Loop** | Word 输出后自动校验格式 | Word 格式 100% 通过 |
-
-**最大重试：** 每个 Loop 3 次，超过则强制 Human-in-the-loop。
-**Human-in-the-loop检查点：** Phase 1/2.5/4/5.2 末尾，必须用户确认才能推进。
+**速记：** 每个 Loop 最多重试 3 次；Phase 1 / 2.5 / 4 / 5.2 末尾为强制 HIL 节点（必须用户确认才能推进）。
 
 ## Guardrails 校验（10 项）
 
@@ -285,17 +328,16 @@ python3 scripts/loop_self_check.py --file 论文_xxx.docx --verify-docx         
 | 9 | 无合并残留（`===END===`） | Phase 4 |
 | 10 | 核心章节关键词（第5章战略/第6章实施） | Phase 2.5 |
 
-## Word 输出质量保障
+## Word 输出
 
-### 正文加粗过滤
-- 正文段落（非标题级）内的 `**text**` → 去掉 `**` 转为普通文字
-- 表格单元格内的 `**` 同步清除（`scripts/md2docx_strict.py` 的 `_strip_bold()` 函数）
-
-### 三线表格式
-- 顶线 1.5 磅 / 表头底线 0.75 磅 / 底线 0.5 磅，无竖线
-
-### 分页
-- 每章标题前插入分页符（首章跳过），附录/致谢前分页
+> **本段已外移。** Word 转换、加粗过滤、三线表、分页、Guardrails 10 项校验等所有 Word 相关细节，由独立 skill `thesis-docx-export` 承载。
+>
+> 调用入口和文档：
+> - Skill：`thesis-docx-export/SKILL.md`
+> - 18 项格式规范清单：`thesis-docx-export/references/checklist.md`
+> - 10 项 Guardrails 校验：`thesis-docx-export/scripts/loop_self_check.py`（软链接 → `scripts/loop_self_check.py`）
+>
+> 主 skill 只在 Phase 5.2 阶段调用本 skill，不在 Phase 1-5 重复展开。
 
 ## 附录：脚本与文档结构
 
@@ -308,13 +350,21 @@ thesis-workflow/
 ├── install.sh                  ← 安装脚本
 ├── .clawhubignore / .github/workflows/skill-publish.yml
 ├── scripts/
-│   ├── md2docx_strict.py       ← Word 合规转换
-│   ├── loop_self_check.py      ← Guardrails 自动化校验（10项）
+│   ├── md2docx_strict.py       ← Word 合规转换（真身在主 skill；docx-export 软链接共享）
+│   ├── loop_self_check.py      ← Guardrails 自动化校验（10项）（真身在主 skill；docx-export 软链接共享）
 │   ├── state_manager.py        ← 状态文件管理
 │   └── tests/                  ← 单元测试
-└── references/
-    ├── checklist.md            ← 学术规范人工对照清单
-    └── loop-design.md          ← Loop 设计原理说明
+├── references/
+│   ├── checklist.md            ← 软链接 → thesis-docx-export/references/checklist.md
+│   ├── content-hint-fallback.md ← 附录 B 外移版（v7.0 跑题事故修复方案）
+│   ├── chapter-summary-design.md ← 章节摘要节点设计
+│   ├── git-workflow.md         ← 双版本发布策略
+│   └── loop-design.md          ← Loop 设计原理说明
+└── thesis-docx-export/         ← 独立 skill（Phase 5.2 Word 输出）
+    ├── SKILL.md                ← docx-export 入口文档
+    ├── README.md / CHANGELOG.md
+    ├── scripts/                ← 软链接主 skill scripts/
+    └── references/             ← checklist.md 真身在此
 ```
 
 ## 附录 A：论文项目运行 Checklist（agent 必遵守）
@@ -386,132 +436,9 @@ python3 ~/.openclaw/scripts/thesis_progress_reporter.py --idle-minutes 60
 
 脚本全局通用，跨 macOS/Linux/Windows，纯 stdlib。idle 60min 自动静默。
 
-## 附录 B：已批准改进方案 — 大纲约束注入（已实施 2026-06-30）
+## 附录 B（指针）：已批准改进方案 — content_hint fallback
 
-> **来源**：v7.0 事故复盘 → 龙哥 22:19 反馈，Q3=A / 2026-06-29  
-> **实施状态**：✅ 已实施并验收（2026-06-30）
-> **注意**：本附录不绑具体版本号。以 SKILL.md frontmatter 的 `metadata.clawdbot.version` 为当前 skill 真实版本。
+历史事故与代码实现已外移到 `references/content-hint-fallback.md`（139 行）。当 `node.content_hint` 为空时，`scripts/context_builder.py` 会自动注入"大纲骨架 + 反面警示"以防 LLM 跑题。
 
-### B.1 背景
+如需查具体函数实现（`_extract_paper_subject` / `_build_outline_skeleton` / `_build_no_runoff_warning`）或验收标准，跳到 references 文件即可。
 
-v7.0 Phase 2 跑题事故显示：当 `node.content_hint` 为空时，LLM 写作完全依赖章节标题推断上下文，导致 LLM 写出通用 MBA 论文（"数字经济转型"），跑偏具体研究对象（A 公司 / vivo / 互联网分发）。
-
-### B.2 目标
-
-当 `node.content_hint` 为空时，**不**直接让 LLM 写，而是构造一个"大纲骨架 + 反面警示"的 prompt 约束，确保不跑题。
-
-### B.3 实施方案
-
-修改 `scripts/context_builder.py` 的 `build_prompt_package()` 函数：
-
-```python
-# 现有逻辑
-content_hint = current.get("content_hint", "").strip()
-
-# v2.x.x 新增（v7.0 跑题事故修复）：当 content_hint 为空时，注入大纲骨架 + 反面警示
-if not content_hint and state:
-    outline_skeleton = _build_outline_skeleton(state, node_id)
-    paper_subject = _extract_paper_subject(paper_name, state)
-    warning_block = _build_no_runoff_warning(paper_subject)
-    content_hint = f"{warning_block}\n\n{outline_skeleton}"
-
-package = { ..., "content_hint": content_hint, ... }
-```
-
-#### B.3.1 新增辅助函数
-
-```python
-def _extract_paper_subject(paper_name: str, outline_state: Optional[Dict] = None) -> str:
-    """提取论文主题描述（用于 warning 主题锁定）
-
-    策略：
-      1. 优先从 outline_state["outline_tree"]["metadata"]["paper_title"] 读
-      2. 否则从 paper_name 去掉版本号后缀
-      3. 兜底返回 paper_name
-    """
-    if outline_state:
-        try:
-            title = outline_state.get("outline", {}).get("outline_tree", {}).get("metadata", {}).get("paper_title")
-            if title and title.strip():
-                return title.strip()
-        except Exception:
-            pass
-    import re as _re
-    subject = _re.sub(r'(_v\d+(?:\.\d+)*|_final|_\d{8}_\d{6})+$', '', paper_name)
-    return subject if subject else paper_name
-
-
-def _build_outline_skeleton(outline_state: Dict, target_node_id: str) -> str:
-    """构造论文大纲骨架"""
-    try:
-        nodes = outline_state.get("outline", {}).get("outline_tree", {}).get("nodes", [])
-    except Exception:
-        return ""
-    lines = ["【论文完整大纲（用于提供上下文）】", ""]
-    for n in nodes:
-        if n.get("is_virtual"):
-            continue
-        level = n.get("level", 2)
-        prefix = "#" * level
-        lines.append(f"{prefix} {n['id']} {n.get('title', '')}")
-    lines.append("")
-    lines.append("【你正在写的节点】")
-    target = next((n for n in nodes if n.get("id") == target_node_id), None)
-    if target:
-        lines.append(f"→ {target.get('title', target_node_id)}（{target_node_id}）")
-    return "\n".join(lines)
-
-
-def _build_no_runoff_warning(paper_subject: str = "本研究主题") -> str:
-    """反面警示：明确禁止跑题
-
-    paper_subject: 论文研究对象描述（建议从 outline metadata.paper_title 取）
-    """
-    return (
-        f"⚠️ 主题锁定：本论文研究对象是「{paper_subject}」。\n"
-        "- ✅ 围绕论文具体研究对象的真实业务场景、技术路线、客户/竞争格局等具体实体\n"
-        "- ✅ 引用与论文主题相关的权威数据源（行业报告 / 学术文献 / 公司财报）\n"
-        "- ❌ 严禁写成通用 MBA 模板论文（如「数字经济 / 企业数字化转型 / 战略管理一般性理论」）\n"
-        "- ❌ 严禁「党的二十大报告提出…」这类脱离论文研究主题的泛泛话语\n"
-        "- ❌ 严禁用「企业四要素模型 / 波特钻石模型」等通用教科书内容代替研究主题的具体业务场景"
-    )
-```
-
-#### B.3.2 关键设计要点
-
-1. **不破坏现有 `content_hint` 非空的路径**：只有当 hint 为空时才插入骨架
-2. **token 成本低**：大纲骨架 < 1 KB，比塞全文 content（100 KB+）省得多
-3. **覆盖完整**：即使 50 个节点 hint 全空，prompt 里仍有大纲骨架明确"我在写论文 X 章节 Y"
-4. **反面警示**：LLM 习惯正面 prompt，加"❌ 严禁"反向约束效果更好
-
-### B.4 测试用例
-
-```python
-def test_content_hint_empty_should_use_skeleton():
-    """given: node.content_hint = '' when: build_prompt_package then: package['content_hint'] 含大纲骨架 + 反面警示"""
-    pass
-
-def test_content_hint_present_should_unchanged():
-    """given: node.content_hint = 'A公司2024年...' when: build_prompt_package then: package['content_hint'] == 原 hint"""
-    pass
-```
-
-### B.5 验收标准
-
-- [x] `_build_outline_skeleton` 输出 < 1500 字（实测 1281 字符）
-- [x] `_build_no_runoff_warning` 输出含至少 3 个 ❌ 禁止项（实测 3 个）
-- [x] 现有非空 hint 路径 PASS（7.2 节点回归通过）
-- [x] Phase 2 跑 1 个节点，验证 prompt 含研究主题关键词（ch1 节点验证通过）
-- [x] 完整 content_hint < 2500 字（实测 1566 字符）
-- [x] 警告块参数化（_build_no_runoff_warning 接受 paper_subject 参数，不再硬编码 A 公司）
-
-### B.6 已完成行动
-
-- [x] 代码实施（context_builder.py + 3 个新函数 + 1 段 fallback 逻辑）
-- [x] 单元级验收（5+1 项 全部通过）
-- [x] 文档同步（SKILL.md 附录 B 代码块与实际代码一致）
-- [ ] CHANGELOG.md 同步（待 v2.0.7 升级时补充）
-- [ ] README.md 改进章节（待 v2.0.7 升级时补充）
-- [ ] ClawHub publish（待 v2.0.7 升级时发布）
-
-数据来源声明：本方案生成于 2026-06-29 龙哥对话，2026-06-30 完成 P0 修复。

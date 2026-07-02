@@ -31,7 +31,7 @@ This repository contains **two independent version lines**, published separately
 - **9 HIL Nodes**: Human-in-the-loop checkpoints for key decisions
 - **Guardrails**: 10 automated checks (chapter completeness, citations, word count, table format)
 - **Loop Architecture**: Orchestrator Loop / Self-Check Loop / Review Loop / Verification Loop
-- **Phase 5 Word Output**: md2docx_strict.py with proper formatting (three-line tables, fonts, spacing)
+- **Phase 5 Word Output**: see [thesis-docx-export](../thesis-docx-export/SKILL.md) (independent sub-skill)
 
 ## Workflow
 
@@ -80,8 +80,7 @@ User → Phase 1 (Outline + Proposal) → Phase 2 (Node-by-Node Writing) → Pha
 - OpenClaw subagent (sessions_spawn)
 - BGE-small-zh Chinese embedding model (Layer 2 title matching)
 - Tavily / arXiv / OpenAlex multi-tool search
-- md2docx_strict.py (Word conversion)
-- Guardrails loop_self_check.py (10 automated checks)
+- **Word Export**: see [thesis-docx-export](../thesis-docx-export/SKILL.md) (independent sub-skill)
 
 ## License
 

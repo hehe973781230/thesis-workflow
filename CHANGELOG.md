@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-07-02
+
+### Changed (中粒度拆分)
+
+- **拆分出独立子 skill `thesis-docx-export/`**（位于仓库根目录下的子目录，便于 GitHub 维护）
+  - `scripts/md2docx_strict.py` 真身仍在主 skill `scripts/`，docx-export 用软链接共享（避免代码 drift）
+  - `scripts/loop_self_check.py` 真身仍在主 skill `scripts/`，docx-export 用软链接共享
+  - `references/checklist.md` 真身迁至 `thesis-docx-export/references/`，主 skill 侧用软链接保留引用
+- **主 skill SKILL.md**："Word 输出质量保障"段（11 行）外移为指针，引用 `thesis-docx-export` skill
+- **Phase 5 段**：Phase 5.2 引用从 `python3 scripts/md2docx_strict.py` 改为 `thesis-docx-export` skill
+- **README.md / README_EN.md**：Phase 5 Word 输出段更新为指向 docx-export 子目录
+
+### Notes
+
+- 拆分原则：Word 输出是个完整的、可重用的子任务，独立发布价值高
+- 真身归属：Python 脚本真身在主 skill（被 18 个其他模块使用），references/ 真身在 docx-export（消费者主要是 docx-export 的脚本）
+- 软链接策略：跨目录软链接统一管理，避免双向维护带来的 drift
+
 ## [2.0.21-beta] - 2026-07-01
 
 ### Fixed
