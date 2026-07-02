@@ -41,7 +41,7 @@ def load_minimax_api_key() -> str:
     可靠加载 MiniMax API Key（方案 A:显式 source ~/.zshrc）
 
     解决：subprocess 中 bash -c 'source ~/.zshrc' 不加载 zsh 特有配置的问题
-    龙哥的环境中 MINIMAX_API_KEY 写在 ~/.zshrc，用 bash -lc 才能可靠读取
+    用户环境中 MINIMAX_API_KEY 写在 ~/.zshrc，用 bash -lc 才能可靠读取
     """
     # 方案 A: bash -lc 加载 zshrc（-l=login shell, -c=执行命令）
     try:
@@ -289,7 +289,7 @@ def get_runtime_llm(agent_id: Optional[str] = None) -> RuntimeLLM:
 
 def get_session_llm_func(agent_id: Optional[str] = None) -> Callable[[str], str]:
     """
-    获取固化到内存的 llm_func（龙哥方案：一次固化，后续直接用）。
+    获取固化到内存的 llm_func（一次固化，后续直接用）。
 
     依赖 openclaw sessions list + agent plugin catalog。
     必须在 OpenClaw session 上下文中调用（需要能访问 ~/.openclaw/agents/）。

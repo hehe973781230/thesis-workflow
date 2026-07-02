@@ -405,7 +405,7 @@ thesis-workflow/
 
 ## 附录 A：论文项目运行 Checklist（agent 必遵守）
 
-> **来源**：v7.0 事故复盘 → 龙哥 22:19 反馈 / 2026-06-29  
+> **来源**：v7.0 事故复盘 → 运营者 22:19 反馈 / 2026-06-29  
 > **适用对象**：跑 thesis-workflow-v2 的任何 agent（含 main session 和 isolated）  
 > **生效日期**：2026-06-29 起
 

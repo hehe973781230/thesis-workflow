@@ -2363,7 +2363,7 @@ def orchestrate(paper_name: str,
             if not input_data:
                 return {"ok": False, "error": "phase1_1_init 需要 input_data(docx_path 或 outline_text)"}
             # P0-1 修复：收到新开题报告时强制重置 state，确保从 Phase 1.1 开始
-            # 龙哥指令：直接重置，不需要确认
+            # 运营指令：直接重置，不需要确认
             reset_orchestrate_state(paper_name)
             return orchestrate_phase1_1(paper_name, input_type, input_data, docx_path)
         elif action == "phase1_confirm":

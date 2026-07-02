@@ -8,7 +8,7 @@ Phase 数据管理的 Facade 模式封装。
 使用示例：
     from phase_manager import PhaseManager
 
-    pm = PhaseManager("论文_徐龙_v1")
+    pm = PhaseManager("论文_paper_v1")  # v2.1.2 PII 清理：示例名脱敏
 
     # 保存 Phase 产出
     result = pm.save_phase_output(
