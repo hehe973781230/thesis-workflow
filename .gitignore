@@ -1,3 +1,6 @@
+# Release metadata（本地发布记录，跟 ClawHub 同步）
+.release-meta.json
+
 # Runtime / IDE
 .opencode/
 .ralph/
