@@ -194,27 +194,6 @@ def _check_python_docx():
     return True
 
 
-def _check_hermes():
-    result = subprocess.run(
-        ["hermes", "--version"],
-        capture_output=True, text=True, timeout=10
-    )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr or "not found")
-    return result.stdout.strip()
-
-
-def _install_hermes():
-    # 优先用 pipx，其次 pip
-    for cmd in [["pipx", "install", "hermes-ai"], ["pip", "install", "hermes-ai"]]:
-        try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            if r.returncode == 0:
-                return
-        except Exception:
-            continue
-    raise RuntimeError("pipx/pip 安装均失败，请手动安装 hermes-ai")
-
 
 def _check_tavily_mcp():
     result = subprocess.run(
@@ -314,15 +293,6 @@ def preflight_check(skip_install: bool = False) -> Tuple[bool, list, list]:
             description="Word 文档读写"
         ),
 
-        # P1: 建议安装（可降级）
-        Dependency(
-            "Hermes CLI", _check_hermes,
-            install_cmd="pipx install hermes-ai  或  pip install hermes-ai",
-            install_fn=_install_hermes,
-            required=False, block_on_fail=False,
-            description="版本H起草引擎（深度逻辑链），可降级到版本O",
-            install_category="silent"
-        ),
         Dependency(
             "Tavily MCP", _check_tavily_mcp,
             install_cmd="mcp install tavily-mcp",

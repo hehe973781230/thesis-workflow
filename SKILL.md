@@ -6,7 +6,7 @@ metadata:
   # ↓ OpenClaw 私有配置（仅 ClawHub 加载器识别；不影响标准 platforms 字段）
   clawdbot:
     emoji: "📝"
-    version: "2.1.1-beta.12"   # 单一真实来源，发布前必须先改这里。发布规则见 scripts/release.py
+    version: "2.1.1"   # 单一真实来源，发布前必须先改这里。发布规则见 scripts/release.py
     requires: {}
     os: ["linux", "darwin", "win32"]
 ---
@@ -265,8 +265,8 @@ r = orchestrate(paper_name, action="phase1_3_confirm")
 
 # Phase 2: 逐节点写作（v2.0.4 推荐调用模式）
 for node_id in next_nodes:
-    r = write_single_node(paper_name, node_id, llm_func=my_llm,
-                          reviewer_func=my_reviewer)  # 独立评审
+    r = write_single_node(paper_name, node_id,
+                          reviewer_func=my_reviewer)  # 独立评审，llm_func 内部从 session 获取
 
 # Phase 3: 整合
 r = orchestrate(paper_name, action="phase3_review")

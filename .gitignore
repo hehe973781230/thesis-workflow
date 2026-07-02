@@ -1,0 +1,22 @@
+# Runtime / IDE
+.opencode/
+.ralph/
+__pycache__/
+*.pyc
+*.pyc.bak
+*.bak
+
+# Environment
+config.env
+
+# OS
+.DS_Store
+*.swp
+*.swo
+
+# Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
