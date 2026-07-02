@@ -214,7 +214,11 @@ def _detect_openclaw_platform() -> bool:
 
 
 def _check_openclaw_tavily_bridge() -> bool:
-    """检测 OpenClaw 内置 Tavily MCP 桥接是否注册(通过 openclaw skills list)"""
+    """检测 OpenClaw 内置 Tavily MCP 桥接是否注册(通过 openclaw skills list)
+
+    v2.1.2 修正:OpenClaw skill 名称是 'tavily-search' (不是 'tavily-mcp'),
+    且 name 字段可能含 emoji 前缀,采用模糊匹配。
+    """
     openclaw_path = _find_openclaw()
     result = subprocess.run(
         [openclaw_path, "skills", "list", "--json"],
@@ -226,11 +230,13 @@ def _check_openclaw_tavily_bridge() -> bool:
         data = json.loads(result.stdout)
     except Exception as e:
         raise RuntimeError(f"openclaw skills list 输出解析失败: {e}")
-    installed = [s.get("name") for s in data.get("skills", [])]
-    if "tavily-mcp" not in installed:
+    installed = [s.get("name", "") for s in data.get("skills", [])]
+    # 模糊匹配:去除 emoji/空白后检查是否含 tavily
+    normalized = [name.strip().lstrip("🔍⚙️🤖📝").strip().lower() for name in installed]
+    if not any("tavily" in n for n in normalized):
         raise RuntimeError(
-            "OpenClaw 平台下 tavily-mcp 未注册。"
-            "请执行: openclaw skills install tavily-mcp"
+            "OpenClaw 平台下 tavily-search skill 未注册。"
+            "请执行: openclaw skills install tavily-search"
         )
     return True
 
@@ -466,36 +472,53 @@ def preflight_check(skip_install: bool = False) -> Tuple[bool, list, list]:
 # HIL 硬暂停工具
 # ============================================================
 
-def hil_pause(hil_id: str, message: str, options: Optional[Dict[str, str]] = None) -> str:
-    """HIL 硬暂停：打印清晰提示，等用户输入决策"""
+def hil_pause(hil_id: str, message: str, options: Optional[Dict[str, str]] = None,
+             allow_extra: bool = False) -> str:
+    """HIL 硬暂停:打印清晰提示,等用户输入决策
+
+    Args:
+        hil_id: HIL 编号(如 "1")
+        message: 提示消息
+        options: 选项字典 {key: description}
+        allow_extra: 是否允许 key 后接附加内容(v2.1.2 公司映射用)
+                   True 时,输入 "[1] vivo" 返回完整字符串 "[1] vivo"
+                   False 时,只接受纯 key,附加内容会被拒绝
+    """
     print()
     print("=" * 60)
     print(f"🛑 HIL #{hil_id}")
     print("=" * 60)
     print(message)
     if options:
-        print("\n可选决策：")
+        print("\n可选决策:")
         for k, v in options.items():
             print(f"  [{k}] {v}")
     print()
 
     while True:
         try:
-            choice = input("请输入决策（输入 quit 退出）: ").strip()
+            choice = input("请输入决策(输入 quit 退出): ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n⚠️ 输入中断，退出")
+            print("\n⚠️ 输入中断,退出")
             sys.exit(0)
 
         if choice == "quit":
             sys.exit(0)
 
-        if options and choice in options:
-            return choice
+        if options:
+            # v2.1.2:allow_extra 模式:接受 "[key] extra" 格式
+            if allow_extra:
+                matched = next((k for k in options if choice.startswith(f"[{k}]") or choice == k), None)
+                if matched:
+                    return choice
+            # 标准模式:只接受纯 key
+            elif choice in options:
+                return choice
 
         if not options and choice in ("", "y", "yes", "确认", "ok"):
             return choice
 
-        print(f"⚠️ 无效输入: {choice}，请重新选择")
+        print(f"⚠️ 无效输入: {choice},请重新选择")
 
 
 def get_paper_status(paper_name: str) -> Optional[Dict[str, Any]]:
@@ -593,9 +616,10 @@ def run_phase1(paper_name: str) -> bool:
     print(f"         不会进入最终 Word 文档")
 
     choice = hil_pause("1", "以上大纲结构是否准确？（需同时完成公司映射）",
-                     {"1": f"确认 [填入 actual_name，例如：[1] vivo]",
-                      "2": "跳过公司映射（actual_name=None，仅适用于纯理论论文）",
-                      "3": "取消（修改后重跑）"})
+                     {"1": f"确认 [填入 actual_name,例如:[1] vivo]",
+                      "2": "跳过公司映射(actual_name=None,仅适用于纯理论论文)",
+                      "3": "取消(修改后重跑)"},
+                     allow_extra=True)
 
     # Phase 1.2: 大纲确认（带公司映射决策）
     r = orchestrate(paper_name, action="phase1_confirm", user_input=choice)

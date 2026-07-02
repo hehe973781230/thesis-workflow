@@ -440,7 +440,7 @@ def confirm_phase1(paper_name: str, user_input: str = None) -> Dict[str, Any]:
     # 解析用户输入的 HIL #1 决策(v2.1.2 公司映射)
     if user_input is not None:
         decision_text = user_input.strip()
-        ci = state.get("company_info") or {}
+        ci = dict(state.get("company_info") or {})  # v2.1.2 修复:创建副本,避免引用问题
         if decision_text.startswith("[3]") or decision_text.lower() in ("cancel", "quit"):
             return {
                 "ok": False,
@@ -605,11 +605,15 @@ def orchestrate_phase1_3(
     # 4.1 提取去标识公司名（code_name）
     code_name_result = extract_code_name_from_docx(docx_path, llm_func=llm_func)
     if code_name_result.get("ok"):
+        # v2.1.2 修复:保留 HIL #1 confirm_phase1() 已写入的 actual_name/confirmed 字段
+        # 只在 company_info 尚未存在时初始化,避免覆盖用户在 HIL #1 填写的 actual_name
+        existing_ci = state.get("company_info") or {}
         state["company_info"] = {
             "code_name": code_name_result["code_name"],
-            "actual_name": None,  # actual_name 由用户在 Phase 1.1 HIL 手动填写
-            "confirmed": False,
-            "confirmed_at": None
+            "actual_name": existing_ci.get("actual_name"),  # 保留 HIL #1 填值
+            "skip_mapping": existing_ci.get("skip_mapping", False),
+            "confirmed": existing_ci.get("confirmed", False),
+            "confirmed_at": existing_ci.get("confirmed_at"),
         }
 
     # 4.2 生成各节点检索关键词（LLM 从开题报告提取，复用 proposal_result）
@@ -2363,7 +2367,8 @@ def orchestrate(paper_name: str,
             reset_orchestrate_state(paper_name)
             return orchestrate_phase1_1(paper_name, input_type, input_data, docx_path)
         elif action == "phase1_confirm":
-            return confirm_phase1(paper_name)
+            # v2.1.2:传递 user_input 用于 HIL #1 公司映射决策
+            return confirm_phase1(paper_name, user_input=kwargs.get("user_input"))
         elif action == "phase1_3_submit":
             # 修订 11.9:docx_path 从 state 读,不再要求传
             docx_path = kwargs.get("docx_path")  # 可选,仅用于覆盖
