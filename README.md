@@ -45,6 +45,8 @@ openclaw skills install thesis-workflow-v2
 - **Phase 3.5 深度学术评审**：P0/P1/P2 分级问题清单，自动修复 + 重审闭环
 - **RuntimeLLM**：零硬编码，自动复用当前 session 模型配置
 - **9 个 HIL 节点**：human-in-the-loop 检查点，关键决策不跳过
+- **公司映射强制采集**（v2.1.2+）：HIL #1 同步确认大纲 + 实际公司名（`actual_name`），确保 Phase 2 数据检索锚定真实公司
+- **OpenClaw 平台适配**（v2.1.2+）：Tavily MCP 检测自动识别 OpenClaw runtime，走内置桥接；不再依赖外部 `mcporter` CLI
 - **Guardrails 自检**：10 项自动化规范检查（章节完整性/字数/引用/表格格式等）
 - **Loop 架构**：Orchestrator Loop / 内部自检 Loop / 审核 Loop / Verification Loop
 - **Phase 5 Word输出**：[thesis-docx-export](../thesis-docx-export/SKILL.md) skill（独立子 skill，三线表/分页/字体/行距）
@@ -119,6 +121,7 @@ openclaw skills install thesis-workflow-v2
 - OpenClaw subagent (sessions_spawn)
 - BGE-small-zh 中文向量模型（Layer 2 标题匹配）
 - Tavily / arXiv / OpenAlex 多工具并行检索
+- **OpenClaw 平台原生集成**（v2.1.2+）：Tavily 通过 `openclaw skills list` 检测，不再依赖 mcporter
 - **Word 输出**：见 [thesis-docx-export](../thesis-docx-export/SKILL.md) 独立 skill
 
 ## License

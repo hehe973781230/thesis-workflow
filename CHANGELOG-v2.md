@@ -1,9 +1,48 @@
 # CHANGELOG - v2.x 新框架
 
 > v2.x 是 **v2 框架**（outline-anchored 重构 + 9 HIL 节点 + 真实 CLI 入口）的活跃开发分支。
-> 当前 latest: **v2.1.1-beta.3**
+> 当前 latest: **v2.1.2-beta.1**
 > ClawHub Slug: `thesis-workflow-v2`（独立仓库）
 > 详见 [CHANGELOG.md](./CHANGELOG.md) 的版本线索引。
+
+## [v2.1.2-beta.1] - 2026-07-02
+
+### P0 修复：Tavily MCP 平台集成 + 公司映射强制采集
+
+**问题来源：** 用户在 2026-07-02 跑 v2 时发现 2 个 P0 问题（详见反思文档）。
+
+#### 1. Tavily MCP pre-flight 与 OpenClaw 集成不匹配
+
+- **问题**：v2 脚本假定 `mcporter` CLI 存在，但 OpenClaw 通过内置 MCP bridge 暴露 Tavily，`mcporter` 不存在
+- **修复**：
+  - 新增 `_detect_openclaw_platform()`：检测 `OPENCLAW_RUNTIME` env 或 openclaw CLI
+  - 新增 `_check_openclaw_tavily_bridge()`：通过 `openclaw skills list --json` 验证 tavily-mcp 注册
+  - `_check_tavily_mcp()` 改造：OpenClaw 走内置桥接，Hermes 降级到 mcporter
+  - Tavily Dependency `install_category` 从 `needs_ai` 改为 `none`（truly optional）
+- **影响**：OpenClaw runtime 下不再需要 `~/.local/bin/mcporter` mock wrapper
+- **向后兼容**：Hermes 仍走 mcporter 路径
+
+#### 2. HIL #1 缺公司映射强制采集
+
+- **问题**：`state['company_info']['actual_name']` 永远是 null，但 v2 设计上要求用户在 HIL #1 填
+- **修复**：
+  - `confirm_phase1()` 新增 `user_input` 参数，解析 `[1] vivo` / `[2]` / `[3]` 决策
+  - 强制校验：`actual_name=null && skip_mapping=false` → 返回 error
+  - HIL #1 prompt 扩展：3 选项（接受+填actual_name / 跳过映射 / 取消）
+  - 状态字段完整化：`company_info` 包含 `actual_name` / `skip_mapping` / `confirmed` / `confirmed_at`
+- **HIL 总数**：仍 9（公司映射合并入 #1，不新增节点）
+- **安全约束**：`actual_name` 不会进入最终 Word 文档
+
+#### 文档同步
+
+- `SKILL.md`：HIL #1 描述更新 + 公司映射章节 + Tavily 平台适配章节
+- `README.md` / `README_EN.md`：OpenClaw 平台说明 + 公司映射章节
+- `metadata.version`: 2.1.1 → 2.1.2-beta.1
+
+#### 验收
+
+- e2e 测试见 `~/.openclaw/workspace/memory/2026-07-02_thesis-v2-phase1-reflect.md`
+- 跑通 `python3 scripts/run_workflow.py A公司_互联网分发 --phase phase1` 验证
 
 ## ⚠️ Alpha 阶段说明
 

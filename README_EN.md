@@ -13,12 +13,12 @@ This repository contains **two independent version lines**, published separately
 | Version | ClawHub Slug | Latest | Status |
 |---------|-------------|--------|--------|
 | **v1.x** (stable) | `thesis-workflow` | **v1.7.3** | Maintenance only, compatibility fixes |
-| **v2.x** (new framework) | `thesis-workflow-v2` | **v2.0.12-beta** | ⚠️ Beta, outline-anchored + 9 HIL |
+| **v2.x** (new framework) | `thesis-workflow-v2` | **v2.1.2-beta.1** | ⚠️ Beta, outline-anchored + 9 HIL + OpenClaw platform integration |
 
 ### Selection Guide
 
 - **Production / v1 users** → `thesis-workflow` (v1.7.3, stable)
-- **New framework / outline-anchored / 9 HIL** → `thesis-workflow-v2` (v2.0.12-beta, testing)
+- **New framework / outline-anchored / 9 HIL** → `thesis-workflow-v2` (v2.1.2-beta.1, testing)
 - **Multiple theses** → Both can coexist
 
 ## Core Features (v2 Framework)
@@ -29,6 +29,8 @@ This repository contains **two independent version lines**, published separately
 - **Phase 3.5 Academic Deep Review**: P0/P1/P2 graded issue list, auto-fix + re-review loop
 - **RuntimeLLM**: Zero hardcoded config, auto-reuse current session model
 - **9 HIL Nodes**: Human-in-the-loop checkpoints for key decisions
+- **Company Mapping Enforcement** (v2.1.2+): HIL #1 confirms outline + `actual_name` simultaneously, ensures Phase 2 data retrieval anchored to real company
+- **OpenClaw Platform Integration** (v2.1.2+): Tavily MCP auto-detects OpenClaw runtime via `openclaw skills list`; no external `mcporter` dependency
 - **Guardrails**: 10 automated checks (chapter completeness, citations, word count, table format)
 - **Loop Architecture**: Orchestrator Loop / Self-Check Loop / Review Loop / Verification Loop
 - **Phase 5 Word Output**: see [thesis-docx-export](../thesis-docx-export/SKILL.md) (independent sub-skill)
@@ -80,6 +82,7 @@ User → Phase 1 (Outline + Proposal) → Phase 2 (Node-by-Node Writing) → Pha
 - OpenClaw subagent (sessions_spawn)
 - BGE-small-zh Chinese embedding model (Layer 2 title matching)
 - Tavily / arXiv / OpenAlex multi-tool search
+- **OpenClaw Native Integration** (v2.1.2+): Tavily detected via `openclaw skills list`, no mcporter required
 - **Word Export**: see [thesis-docx-export](../thesis-docx-export/SKILL.md) (independent sub-skill)
 
 ## License

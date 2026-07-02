@@ -421,13 +421,65 @@ def orchestrate_phase1_1(
     }
 
 
-def confirm_phase1(paper_name: str) -> Dict[str, Any]:
+def confirm_phase1(paper_name: str, user_input: str = None) -> Dict[str, Any]:
+    """
+    v2.1.2+:支持 HIL #1 公司映射决策路由。
+    user_input 格式:
+      - "[1] vivo" → 接受大纲,actual_name="vivo"
+      - "[1] 跳过" 或 "[2]" → 接受大纲,skip_mapping=true
+      - "[3]" → 取消(返回 error,不修改 state)
+      - None / 其他 → 接受大纲但不更新 actual_name(用于 v2.1.2 之前的兼容路径)
+    """
     state = load_orchestrate_state(paper_name)
     if not state:
         return {"ok": False, "error": "状态文件不存在"}
 
     if state.get("phase1_confirmed"):
         return {"ok": True, "message": "目录已确认"}
+
+    # 解析用户输入的 HIL #1 决策(v2.1.2 公司映射)
+    if user_input is not None:
+        decision_text = user_input.strip()
+        ci = state.get("company_info") or {}
+        if decision_text.startswith("[3]") or decision_text.lower() in ("cancel", "quit"):
+            return {
+                "ok": False,
+                "error": "用户取消 HIL #1 确认,phase1_confirmed 未更新",
+                "phase1_confirmed": False
+            }
+        if decision_text.startswith("[1]"):
+            # 提取 actual_name: "[1] vivo" → "vivo"
+            actual = decision_text[3:].strip()
+            # 处理 "[1] 跳过" 这种歧义输入:视为跳过
+            if actual in ("", "跳过", "skip", "无", "none"):
+                ci["skip_mapping"] = True
+                ci["actual_name"] = None
+            else:
+                ci["actual_name"] = actual
+                ci["skip_mapping"] = False
+        elif decision_text.startswith("[2]"):
+            ci["skip_mapping"] = True
+            ci["actual_name"] = None
+        # [其他]/空 → 保持原样(向后兼容 v2.1.2 之前的调用)
+
+        # v2.1.2 P0:强制校验公司映射
+        if not ci.get("actual_name") and not ci.get("skip_mapping"):
+            return {
+                "ok": False,
+                "error": (
+                    "公司映射未填写。请在 HIL #1 提供 actual_name(如 [1] vivo)或选择跳过([2])。"
+                    "该信息仅用于数据检索 + 写作锚定 + 脱敏校验,不会进入最终 Word 文档。"
+                ),
+                "phase1_confirmed": False,
+                "company_info": ci,
+                "hint": (
+                    "OpenClaw runtime 下,agent 应主动询问用户 actual_name 后再调用 confirm_phase1"
+                )
+            }
+
+        ci["confirmed"] = True
+        ci["confirmed_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        state["company_info"] = ci
 
     state["phase1_confirmed"] = True
     # 拍板 #1 强制 + #2 方案 B 枚举字段:
@@ -441,8 +493,13 @@ def confirm_phase1(paper_name: str) -> Dict[str, Any]:
         "ok": True,
         "phase": "phase1_2",
         "phase1_3_status": "pending",
+        "company_info": state.get("company_info"),
         "hil_message": None,
-        "message": "目录已确认(Phase 1.2 完成)，请核对下方归因分析(Phase 1.3)"
+        "message": (
+            "目录已确认(Phase 1.2 完成)。"
+            f"公司映射:actual_name={state.get('company_info', {}).get('actual_name') or '(跳过)'}。"
+            "请核对下方归因分析(Phase 1.3)"
+        )
     }
 
 

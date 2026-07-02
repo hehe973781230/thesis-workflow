@@ -6,7 +6,7 @@ metadata:
   # ↓ OpenClaw 私有配置（仅 ClawHub 加载器识别；不影响标准 platforms 字段）
   clawdbot:
     emoji: "📝"
-    version: "2.1.1"   # 单一真实来源，发布前必须先改这里。发布规则见 scripts/release.py
+    version: "2.1.2-beta.1"   # 单一真实来源，发布前必须先改这里。发布规则见 scripts/release.py
     requires: {}
     os: ["linux", "darwin", "win32"]
 ---
@@ -55,17 +55,25 @@ v2 仍处于 beta，**生产论文默认走 v1**。仅当用户明确要求时�
 
 v2 在 9 个位置**强制 human-in-the-loop**：每到这些点状态机会 hard pause，必须用户确认才能推进。如果 agent 想绕过任何一项，v2.0.6 的拦截规则会拒绝（见 §v2.0.6 拦截规则）：
 
-| #  | 触发位置                       | 检查内容           | 决策              |
-|----|--------------------------------|--------------------|-------------------|
-| 1  | Phase 1.1 后                  | 大纲结构           | 接受 / 修改        |
-| 2  | Phase 1.3 后                  | 归因结果           | 接受 / 调整 hint   |
-| 3  | 在 `write_single_node()` 写入单节点前 | info_scarcity      | 提供 hint / AI 生成 / 跳过 |
-| 4  | Phase 2 评审后                | quality=medium/low | 接受 / 重写        |
-| 5  | Phase 2 完成后                | 章节内容预览       | 通过 / 修改        |
-| 6  | Phase 3 整合后                | 整合版内容         | 通过 / 修改反馈    |
-| 7  | Phase 3.5 P0 修复             | 超 3 轮未收敛      | 接受 / 继续修订    |
-| 8  | Phase 4 整合方案              | 方案是否接受       | 接受 / 修改        |
-| 9  | Phase 5.2 后                  | Word 输出          | 导出 / 修改        |
+| #  | 触发位置                       | 检查内容                       | 决策                          |
+|----|--------------------------------|--------------------------------|-------------------------------|
+| 1  | Phase 1.1 后                  | 大纲结构 + 公司映射            | 接受(actual_name/跳过) / 修改 |
+| 2  | Phase 1.3 后                  | 归因结果                       | 接受 / 调整 hint             |
+| 3  | 在 `write_single_node()` 写入单节点前 | info_scarcity            | 提供 hint / AI 生成 / 跳过   |
+| 4  | Phase 2 评审后                | quality=medium/low             | 接受 / 重写                  |
+| 5  | Phase 2 完成后                | 章节内容预览                   | 通过 / 修改                  |
+| 6  | Phase 3 整合后                | 整合版内容                     | 通过 / 修改反馈              |
+| 7  | Phase 3.5 P0 修复             | 超 3 轮未收敛                  | 接受 / 继续修订              |
+| 8  | Phase 4 整合方案              | 方案是否接受                   | 接受 / 修改                  |
+| 9  | Phase 5.2 后                  | Word 输出                      | 导出 / 修改                  |
+
+**HIL #1 公司映射（v2.1.2+）：** HIL #1 同时确认大纲 + 采集公司 `actual_name`：
+- 输入 `[1] vivo` → 接受大纲，`actual_name="vivo"`
+- 输入 `[2]` → 接受大纲，`skip_mapping=true`（仅适用于纯理论论文）
+- 输入 `[3]` → 取消，不修改 state
+- 不提供 actual_name 且不跳过 → `confirm_phase1()` 返回错误「公司映射未填写」
+
+> **总计 9 HIL 节点**（公司映射合并入 #1，不新增节点）。
 
 **反模式：** 不要给 agent 传 `allow_skip_hil=True` 或在 prompt 里写"自动通过所有 HIL"——HIL 是论文质量最后一道防线，绕过它的代价是错版交付给导师。
 
@@ -112,6 +120,27 @@ Phase 1（规划）→ Phase 2（逐节点写作）→ Phase 2.5（内容确认�
 - 搜索 prompt 用真实名，输出 prompt 用代号
 - 映射关系不进入最终文档
 
+#### 公司映射状态字段（v2.1.2+）
+
+```json
+"company_info": {
+  "code_name": "A公司",      // 从开题报告 docx 自动提取
+  "actual_name": "vivo",     // HIL #1 由用户填入；空/null = 未填
+  "skip_mapping": false,     // true = 显式跳过(纯理论论文)
+  "confirmed": true,         // confirm_phase1() 校验通过
+  "confirmed_at": "2026-07-02T..."
+}
+```
+
+**强制校验：** `confirm_phase1()` 在 v2.1.2+ 会拒绝 `actual_name=None && skip_mapping=false` 的 state，必须二选一。
+
+**使用场景：**
+- Phase 2 数据检索：搜 `actual_name` 公开数据
+- Phase 2 写作锚定：写文档时确保代换为 `code_name`
+- Phase 5 输出前：脱敏校验，确认 `actual_name` 不在最终 Word 正文里
+
+**安全约束：** 该字段**不会进入最终 Word 文档**，仅作为写作过程的内部状态。
+
 ### 检索同步规则
 
 所有 Phase 调用数据查询工具（`web_search` / `academic-research`）时，必须：
@@ -129,9 +158,16 @@ Phase 1（规划）→ Phase 2（逐节点写作）→ Phase 2.5（内容确认�
 | 工具 | 来源 | 适用场景 |
 |------|------|---------|
 | `web_search` | OpenClaw 内置（头条搜索） | 行业数据、市场规模、新闻动态 |
-| `tavily_search` | Tavily MCP（mcporter） | 结构化摘要、权威来源 |
+| `tavily_search` | Tavily MCP（OpenClaw 走内置桥接；Hermes 走 mcporter） | 结构化摘要、权威来源 |
 | `arxiv_search` | arXiv MCP（mcporter） | 前沿学术论文、技术细节 |
 | `openalex_search` | scholar-search.py（OpenAlex） | 学术文献、引用分析 |
+
+**Tavily MCP 检测（v2.1.2+）：** `_check_tavily_mcp()` 自动检测运行平台：
+- **OpenClaw runtime**：通过 `openclaw skills list --json` 检测 `tavily-mcp` 是否注册，注册即通过
+- **Hermes 兼容**：降级调 `mcporter call tavily-mcp.tavily_search`
+- **其他**：报错
+
+Tavily 在 v2.1.2+ 已改为 `install_category="none"`，pre-flight 不再卡 needs_ai_deps 流程。OpenClaw runtime 下 agent 可直接调用内置 `tavily-mcp__tavily_search` 工具。
 
 **Python 层调用（`research_tools.py`）：**
 ```python

@@ -196,6 +196,47 @@ def _check_python_docx():
 
 
 def _check_tavily_mcp():
+    # v2.1.2 平台适配:优先检测 OpenClaw,降级到 mcporter (Hermes 兼容)
+    if _detect_openclaw_platform():
+        return _check_openclaw_tavily_bridge()
+    return _check_mcporter_tavily()
+
+
+def _detect_openclaw_platform() -> bool:
+    """检测是否在 OpenClaw runtime 环境(OPENCLAW_RUNTIME env 或 openclaw CLI 可用)"""
+    if os.environ.get("OPENCLAW_RUNTIME"):
+        return True
+    try:
+        _find_openclaw()
+        return True
+    except Exception:
+        return False
+
+
+def _check_openclaw_tavily_bridge() -> bool:
+    """检测 OpenClaw 内置 Tavily MCP 桥接是否注册(通过 openclaw skills list)"""
+    openclaw_path = _find_openclaw()
+    result = subprocess.run(
+        [openclaw_path, "skills", "list", "--json"],
+        capture_output=True, text=True, timeout=10
+    )
+    if result.returncode != 0:
+        raise RuntimeError("openclaw skills list failed")
+    try:
+        data = json.loads(result.stdout)
+    except Exception as e:
+        raise RuntimeError(f"openclaw skills list 输出解析失败: {e}")
+    installed = [s.get("name") for s in data.get("skills", [])]
+    if "tavily-mcp" not in installed:
+        raise RuntimeError(
+            "OpenClaw 平台下 tavily-mcp 未注册。"
+            "请执行: openclaw skills install tavily-mcp"
+        )
+    return True
+
+
+def _check_mcporter_tavily() -> bool:
+    """mcporter 路径(Hermes 兼容,可能需要 ~/.local/bin/mcporter 桥接)"""
     result = subprocess.run(
         ["mcporter", "call", "tavily-mcp.tavily_search",
          '{"query":"test","max_results":1}'],
@@ -298,8 +339,8 @@ def preflight_check(skip_install: bool = False) -> Tuple[bool, list, list]:
             install_cmd="mcp install tavily-mcp",
             install_fn=_install_tavily_mcp,
             required=False, block_on_fail=False,
-            description="网络搜索增强（可选，web_search 可替代）",
-            install_category="needs_ai"  # 可能有交互式确认
+            description="网络搜索增强（v2.1.2:OpenClaw 走内置桥接；Hermes 走 mcporter）",
+            install_category="none"  # v2.1.2:truly optional,不再卡 needs_ai_deps 流程
         ),
         Dependency(
             "mineru-open-api", _check_mineru,
@@ -530,7 +571,7 @@ def run_phase1(paper_name: str) -> bool:
         if r.get("hil_message"):
             print(f"\n{r['hil_message']}")
 
-    # HIL #1: 大纲确认
+    # HIL #1: 大纲确认 + 公司映射(v2.1.2 新增)
     outline = outline_load(paper_name)
     nodes = outline["outline"]["outline_tree"]["nodes"]
     print(f"\n📋 论文大纲（共 {len(nodes)} 节点）:")
@@ -540,16 +581,32 @@ def run_phase1(paper_name: str) -> bool:
     if len(nodes) > 30:
         print(f"  ... 还有 {len(nodes) - 30} 节点")
 
-    hil_pause("1", "以上大纲结构是否准确？",
-             {"1": "确认（进入归因分析）",
-              "2": "取消（修改后重跑）"})
+    # v2.1.2:从 state 读取公司映射信息以决定 HIL #1 选项
+    state_pre_hil1 = load_orchestrate_state(paper_name) or {}
+    company_info = state_pre_hil1.get("company_info") or {}
+    code_name = company_info.get("code_name") or "(未提取)"
 
-    # Phase 1.2: 大纲确认
-    r = orchestrate(paper_name, action="phase1_confirm")
+    print(f"\n📌 公司映射确认（v2.1.2 新增，HIL #1 必填）:")
+    print(f"   code_name: {code_name}（已从开题报告自动提取）")
+    print(f"   actual_name: ? ← 必须填写或显式跳过")
+    print(f"   说明：该信息仅用于数据检索 + 写作锚定 + 脱敏校验")
+    print(f"         不会进入最终 Word 文档")
+
+    choice = hil_pause("1", "以上大纲结构是否准确？（需同时完成公司映射）",
+                     {"1": f"确认 [填入 actual_name，例如：[1] vivo]",
+                      "2": "跳过公司映射（actual_name=None，仅适用于纯理论论文）",
+                      "3": "取消（修改后重跑）"})
+
+    # Phase 1.2: 大纲确认（带公司映射决策）
+    r = orchestrate(paper_name, action="phase1_confirm", user_input=choice)
     if not r.get("ok"):
         print(f"❌ Phase 1.2 confirm 失败: {r.get('error')}")
+        if "公司映射未填写" in r.get("error", ""):
+            print(f"\n💡 提示：请重新运行脚本，输入 [1] <公司名> 或 [2] 跳过")
         return False
-    print(f"✅ Phase 1.2 完成: 大纲已确认")
+    ci_confirmed = r.get("company_info", {})
+    actual_name = ci_confirmed.get("actual_name") or "(跳过)"
+    print(f"✅ Phase 1.2 完成: 大纲已确认，公司映射 actual_name={actual_name}")
 
     # ── Phase 1.3 归因分析（两步走：先 submit，再等用户确认归因） ──
     state = load_orchestrate_state(paper_name)
